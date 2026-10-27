@@ -323,11 +323,13 @@ body {
 
 /* ---------- Aba Preço 2 ---------- */
 #pagina-preco2 { padding: 0; }
+.dd-rodape { border-top: 1px solid #E1DFDD; padding: 6px 6px 0; margin-top: 4px; }
 .dd-limpar {
-  display: block; width: calc(100% - 12px); margin: 0 6px 6px; padding: 4px 6px; text-align: left;
+  display: block; width: 100%; padding: 5px 6px; text-align: center;
   background: #fff; border: 1px solid #C8C8C8; border-radius: 2px; font-size: 12px; color: var(--vermelho); cursor: pointer;
 }
-.dd-limpar:hover { background: #FDECEA; }
+.dd-limpar:hover:not(:disabled) { background: #FDECEA; }
+.dd-limpar:disabled { color: #A19F9D; background: #F3F2F1; border-color: #E1DFDD; cursor: default; }
 .caixa-mes {
   width: 64px; padding: 4px 6px; border: none; border-radius: 3px; font-size: 12px; text-align: center; background: #fff;
 }

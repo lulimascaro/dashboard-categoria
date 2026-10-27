@@ -550,8 +550,10 @@ function montarSuspenso(id, lista, opcoes, aoMudar) {
     <div class="dd-painel" hidden>
       <input type="search" class="dd-busca" placeholder="Pesquisar">
       <div class="dd-lista"></div>
+      <div class="dd-rodape"><button type="button" class="dd-limpar" disabled>✕ Limpar filtro</button></div>
     </div>`;
   const botao = el.querySelector('.dd-botao');
+  const limpar = el.querySelector('.dd-limpar');
   const painel = el.querySelector('.dd-painel');
   const busca = el.querySelector('.dd-busca');
   const listaEl = el.querySelector('.dd-lista');
@@ -560,6 +562,7 @@ function montarSuspenso(id, lista, opcoes, aoMudar) {
   const desenhar = () => {
     el.querySelector('.dd-texto').textContent = lista.length === 0 ? '(nenhum)'
       : lista.length === 1 ? rotuloDim(lista[0]) : 'Seleções múltiplas';
+    limpar.disabled = lista.length === 0;
     const texto = normalizar(busca.value);
     listaEl.innerHTML = opcoes
       .filter((k) => !texto || normalizar(rotuloDim(k)).includes(texto))
@@ -578,6 +581,14 @@ function montarSuspenso(id, lista, opcoes, aoMudar) {
     if (abrir) { busca.value = ''; desenhar(); busca.focus(); }
   };
   busca.oninput = desenhar;
+  // "Limpar filtro": desmarca só esta caixa; a lista continua aberta
+  limpar.onclick = () => {
+    if (!lista.length) return;
+    lista.splice(0, lista.length);
+    desenhar();
+    clearTimeout(temporizadorDd);
+    aoMudar();
+  };
   listaEl.onclick = (e) => {
     const item = e.target.closest('.dd-item');
     if (!item) return;
@@ -1338,14 +1349,14 @@ function lerConcentracao(texto) {
 }
 
 // Caixa suspensa genérica (seleção única ou múltipla) no estilo do Power BI
-function criarSeletorPreco(id, { unico, vazio, aoMudar, limpar = false }) {
+function criarSeletorPreco(id, { unico, vazio, aoMudar }) {
   const el = $(id);
   el.innerHTML = `
     <button type="button" class="dd-botao dd-largo"><span class="dd-texto"></span><span class="dd-seta">▾</span></button>
     <div class="dd-painel dd-painel-largo" hidden>
-      ${limpar ? '<button type="button" class="dd-limpar">✕ Limpar filtro</button>' : ''}
       <input type="search" class="dd-busca" placeholder="Pesquisar">
       <div class="dd-lista"></div>
+      ${unico ? '' : '<div class="dd-rodape"><button type="button" class="dd-limpar" disabled>✕ Limpar filtro</button></div>'}
     </div>`;
   const painel = el.querySelector('.dd-painel');
   const busca = el.querySelector('.dd-busca');
@@ -1357,6 +1368,7 @@ function criarSeletorPreco(id, { unico, vazio, aoMudar, limpar = false }) {
     const v = [...sel.valores];
     el.querySelector('.dd-texto').textContent = v.length === 0 ? vazio : v.length === 1 ? v[0] : 'Seleções múltiplas';
     el.querySelector('.dd-botao').title = v.join(', ');
+    if (!unico) el.querySelector('.dd-limpar').disabled = v.length === 0;
     if (painel.hidden) return;
     const texto = normalizar(busca.value);
     const filtradas = sel.opcoes.filter((o) => !texto || normalizar(o).includes(texto));
@@ -1375,11 +1387,13 @@ function criarSeletorPreco(id, { unico, vazio, aoMudar, limpar = false }) {
     if (abrir) { busca.value = ''; sel.desenhar(); busca.focus(); }
   };
   busca.oninput = sel.desenhar;
-  if (limpar) {
+  // "Limpar filtro" (só nas caixas de seleção múltipla): desmarca esta caixa; a lista continua aberta
+  if (!unico) {
     el.querySelector('.dd-limpar').onclick = () => {
       if (!sel.valores.size) return;
       sel.valores = new Set();
       sel.desenhar();
+      clearTimeout(temporizadorSel);
       aoMudar();
     };
   }
@@ -1702,7 +1716,7 @@ function prepararPreco2() {
       atualizarPreco2();
     },
   });
-  s.apres = criarSeletorPreco('dd-p2-apres', { unico: false, vazio: 'Todas', limpar: true, aoMudar: atualizarPreco2 });
+  s.apres = criarSeletorPreco('dd-p2-apres', { unico: false, vazio: 'Todas', aoMudar: atualizarPreco2 });
   // controle deslizante (compartilhado com a aba Preço 3): base inteira por padrão
   const n = estado.meses.length;
   for (const pre of ABAS_TEMPO) {
