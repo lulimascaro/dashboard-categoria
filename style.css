@@ -169,22 +169,41 @@ body {
 .exibicao input:disabled { background: #eee; }
 .exibicao input[type=checkbox] { accent-color: var(--azul); margin-top: 1px; }
 
-.seletor { display: flex; align-items: center; gap: 8px; font-weight: 600; flex-wrap: wrap; }
-.multi { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.multi select { padding: 4px 6px; border-radius: 4px; border: none; font-size: 12.5px; }
-.chip {
-  background: #fff; color: var(--texto); border-radius: 14px; padding: 3px 4px 3px 4px;
-  font-size: 12.5px; font-weight: 500; display: inline-flex; align-items: center; gap: 5px;
+.seletor { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+
+/* Caixa suspensa de seleção múltipla (estilo slicer do Power BI) */
+.dropdown { position: relative; font-weight: 400; }
+.dd-botao {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 200px; background: #fff; border: 1px solid #C8C8C8; border-radius: 2px;
+  padding: 5px 8px; font-size: 12px; color: #252423; cursor: pointer; text-align: left;
 }
-.chip b {
-  background: var(--amarelo); color: #333; border-radius: 50%; width: 18px; height: 18px;
-  display: inline-flex; align-items: center; justify-content: center; font-size: 11px;
+.dd-texto { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dd-seta { color: #605E5C; font-size: 11px; }
+.dd-painel {
+  position: absolute; top: calc(100% + 2px); left: 0; z-index: 50;
+  width: 240px; background: #fff; border: 1px solid #C8C8C8;
+  box-shadow: 0 4px 12px rgba(0,0,0,.18); padding: 6px 0;
 }
-.chip button {
-  border: none; background: #ddd; color: #333; border-radius: 50%; width: 18px; height: 18px;
-  cursor: pointer; line-height: 1; padding: 0; font-size: 13px;
+.dd-busca {
+  display: block; width: calc(100% - 12px); margin: 0 6px 6px; padding: 4px 6px;
+  border: 1px solid #C8C8C8; border-radius: 2px; font-size: 12px;
 }
-.chip button:hover { background: var(--vermelho); color: #fff; }
+.dd-lista { max-height: 260px; overflow-y: auto; }
+.dd-item {
+  display: flex; align-items: center; gap: 8px; padding: 4px 10px;
+  font-size: 12px; color: #252423; cursor: pointer; user-select: none;
+}
+.dd-item:hover { background: #F3F2F1; }
+.dd-caixa {
+  width: 13px; height: 13px; border: 1px solid #605E5C; border-radius: 1px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.dd-item.marcado .dd-caixa { background: #252423; border-color: #252423; }
+.dd-item.marcado .dd-caixa::after { content: '✓'; color: #fff; font-size: 10px; line-height: 1; }
+.dd-nome { flex: 1; }
+.dd-ordem { font-size: 10px; color: #605E5C; min-width: 12px; text-align: right; }
+.dd-vazio { padding: 6px 10px; font-size: 12px; color: #888; }
 .kpi { border-radius: 6px; padding: 10px 12px; color: #fff; }
 .kpi-rcd { background: var(--azul); }
 .kpi-und { background: var(--lilas); }
@@ -227,7 +246,7 @@ body {
 #nota-tabela:empty, #nota-grafico:empty { display: none; }
 #nota-grafico { margin-top: -10px; padding: 0 2px; }
 
-.barra-tabela { padding: 6px 8px; display: flex; gap: 6px; }
+.barra-tabela { padding: 6px 8px; display: flex; gap: 6px; flex-wrap: wrap; }
 .botao-pequeno {
   border: 1px solid var(--azul); background: #fff; color: var(--azul);
   border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 12px; font-weight: 600;
@@ -241,6 +260,12 @@ body {
 #tabela tr.nivel-1 { background: #FAFAFC; }
 #tabela tr.nivel-2 { background: #F4F4F8; }
 #tabela tr.linha-outros td:first-child { font-style: italic; color: #555; }
+#tabela tbody tr { cursor: pointer; }
+#tabela tbody tr.apagada { opacity: .4; }
+#tabela tbody tr.selecionada { background: #FFF3C4; box-shadow: inset 4px 0 0 var(--amarelo); }
+#tabela tbody tr.selecionada:hover { background: #FFEC9E; }
+.botao-limpar { border-color: var(--vermelho); color: var(--vermelho); }
+#dica-selecao { font-size: 12px; color: #777; align-self: center; margin-left: 4px; }
 
 /* ---------- Telas pequenas ---------- */
 @media (max-width: 980px) {

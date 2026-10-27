@@ -72,12 +72,22 @@
     <!-- Página 2: Gráfico e Tabela -->
     <main id="pagina-analise" class="pagina" hidden>
       <div class="barra-seletores">
-        <div class="seletor"><span>Gráfico</span><div class="multi" id="multi-grafico"></div></div>
-        <div class="seletor"><span>Tabela</span><div class="multi" id="multi-tabela"></div></div>
+        <div class="seletor"><span>Gráfico</span><div class="dropdown" id="dd-grafico"></div></div>
+        <div class="seletor"><span>Tabela</span><div class="dropdown" id="dd-tabela"></div></div>
         <label>Tempo
           <select id="sel-tempo">
             <option value="MAT">MAT</option>
             <option value="YTD">YTD</option>
+            <option value="MES">Mês</option>
+          </select>
+        </label>
+        <label>Tipo de gráfico
+          <select id="sel-tipo">
+            <option value="empilhado">Barras empilhadas</option>
+            <option value="cem">Barras empilhadas 100%</option>
+            <option value="agrupado">Barras agrupadas</option>
+            <option value="linhas">Linhas</option>
+            <option value="areas">Áreas empilhadas</option>
           </select>
         </label>
         <span id="resumo-filtros"></span>
@@ -109,6 +119,8 @@
             <div class="barra-tabela">
               <button class="botao-pequeno" id="btn-expandir">+ Expandir tudo</button>
               <button class="botao-pequeno" id="btn-recolher">− Recolher tudo</button>
+              <button class="botao-pequeno botao-limpar" id="btn-limpar-selecao" hidden>✕ Limpar seleção</button>
+              <span id="dica-selecao"></span>
             </div>
             <div class="tabela-rolagem">
               <table id="tabela"></table>

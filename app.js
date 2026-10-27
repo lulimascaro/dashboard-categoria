@@ -66,6 +66,8 @@ const estado = {
   dimsTabela: [],      // dimensões da tabela (níveis da matriz), na ordem escolhida
   expandidos: new Set(), // linhas abertas na matriz (caminho dos valores)
   exib: { topN: null, outros: false, auto80: false },
+  meses: [],           // rótulos dos meses da base (ago-21, set-21, …)
+  selecao: new Map(),  // linhas clicadas na tabela: caminho -> condição SQL
   graficos: {},
   arquivoAtual: null,
 };
@@ -278,6 +280,12 @@ async function carregarArquivo(arquivo) {
       selects.push(`SUM(CASE WHEN ${ehUnd} THEN ${periodos[p]} END) AS und_${p}`);
       selects.push(`SUM(CASE WHEN ${ehUnd} THEN ${periodos[p]} * ${qtd} END) AS dos_${p}`);
     }
+    // Valores de cada mês (para o Tempo = Mês)
+    meses.forEach((m, i) => {
+      selects.push(`SUM(CASE WHEN ${med} = 'RCD' THEN num(${sqlColuna(m.coluna)}) END) AS rcd_m${i}`);
+      selects.push(`SUM(CASE WHEN ${ehUnd} THEN num(${sqlColuna(m.coluna)}) END) AS und_m${i}`);
+    });
+    estado.meses = meses.map(rotuloMes);
 
     mostrarProgresso('Processando os números (pode levar alguns segundos em arquivos grandes)…', 0.65);
     await estado.conn.query(`CREATE OR REPLACE TABLE fato AS
@@ -478,7 +486,8 @@ function zerarFiltros() {
 
 
 // ---------------------------------------------------------------------
-// Página 2: seletores de várias dimensões (a ordem importa)
+// Página 2: seletores "Gráfico" e "Tabela" (caixa suspensa estilo Power BI)
+// A ordem em que os itens são marcados define a hierarquia.
 // ---------------------------------------------------------------------
 const PRODUTO_CORP = '__prodcorp';
 
@@ -493,37 +502,74 @@ function exprDim(key) {
 
 function renderizarSeletores() {
   const base = estado.dims.map((d) => d.key);
-  montarMulti('multi-grafico', estado.dimsGrafico, base, () => atualizarGraficos($('sel-tempo').value, clausulaWhere(null)));
-  montarMulti('multi-tabela', estado.dimsTabela, [...base, PRODUTO_CORP], () => {
+  montarSuspenso('dd-grafico', estado.dimsGrafico, base, atualizarGraficos);
+  montarSuspenso('dd-tabela', estado.dimsTabela, [...base, PRODUTO_CORP], () => {
     estado.expandidos = new Set();
-    atualizarTabela($('sel-tempo').value, clausulaWhere(null));
+    const tinhaSelecao = estado.selecao.size > 0;
+    estado.selecao.clear();
+    atualizarTabela();
+    if (tinhaSelecao) { atualizarKpis(tempoTabela(), whereAnalise()); atualizarGraficos(); }
   });
+  // "Mês" só aparece se a base tiver colunas mensais
+  $('sel-tempo').querySelector('option[value="MES"]').hidden = !estado.meses.length;
+  if (!estado.meses.length && $('sel-tempo').value === 'MES') $('sel-tempo').value = 'MAT';
 }
 
-// Desenha as "etiquetas" numeradas (1. Produto ×) e a lista para adicionar
-function montarMulti(id, lista, opcoes, aoMudar) {
+function montarSuspenso(id, lista, opcoes, aoMudar) {
   const el = $(id);
-  const chips = lista.map((k, i) =>
-    `<span class="chip"><b>${i + 1}</b> ${escaparHtml(rotuloDim(k))}<button type="button" data-rm="${i}" title="Remover">×</button></span>`).join('');
-  const restantes = opcoes.filter((k) => !lista.includes(k));
-  el.innerHTML = chips + (restantes.length
-    ? `<select><option value="">+ adicionar…</option>${restantes.map((k) => `<option value="${k}">${escaparHtml(rotuloDim(k))}</option>`).join('')}</select>`
-    : '');
-  el.onclick = (e) => {
-    const b = e.target.closest('button[data-rm]');
-    if (!b) return;
-    lista.splice(Number(b.dataset.rm), 1);
-    montarMulti(id, lista, opcoes, aoMudar);
-    aoMudar();
+  el.innerHTML = `
+    <button type="button" class="dd-botao"><span class="dd-texto"></span><span class="dd-seta">▾</span></button>
+    <div class="dd-painel" hidden>
+      <input type="search" class="dd-busca" placeholder="Pesquisar">
+      <div class="dd-lista"></div>
+    </div>`;
+  const botao = el.querySelector('.dd-botao');
+  const painel = el.querySelector('.dd-painel');
+  const busca = el.querySelector('.dd-busca');
+  const listaEl = el.querySelector('.dd-lista');
+  let temporizadorDd = null;
+
+  const desenhar = () => {
+    el.querySelector('.dd-texto').textContent = lista.length === 0 ? '(nenhum)'
+      : lista.length === 1 ? rotuloDim(lista[0]) : 'Seleções múltiplas';
+    const texto = normalizar(busca.value);
+    listaEl.innerHTML = opcoes
+      .filter((k) => !texto || normalizar(rotuloDim(k)).includes(texto))
+      .map((k) => {
+        const pos = lista.indexOf(k);
+        return `<div class="dd-item${pos >= 0 ? ' marcado' : ''}" data-k="${k}">
+          <span class="dd-caixa"></span><span class="dd-nome">${escaparHtml(rotuloDim(k))}</span>
+          <span class="dd-ordem">${pos >= 0 ? pos + 1 : ''}</span></div>`;
+      }).join('') || '<div class="dd-vazio">Nada encontrado</div>';
   };
-  const sel = el.querySelector('select');
-  if (sel) sel.onchange = () => {
-    if (!sel.value) return;
-    lista.push(sel.value);
-    montarMulti(id, lista, opcoes, aoMudar);
-    aoMudar();
+
+  botao.onclick = () => {
+    const abrir = painel.hidden;
+    document.querySelectorAll('.dd-painel').forEach((p) => { p.hidden = true; });
+    painel.hidden = !abrir;
+    if (abrir) { busca.value = ''; desenhar(); busca.focus(); }
   };
+  busca.oninput = desenhar;
+  listaEl.onclick = (e) => {
+    const item = e.target.closest('.dd-item');
+    if (!item) return;
+    const k = item.dataset.k;
+    const pos = lista.indexOf(k);
+    if (pos >= 0) lista.splice(pos, 1); else lista.push(k);
+    desenhar();
+    clearTimeout(temporizadorDd);
+    temporizadorDd = setTimeout(aoMudar, 250);
+  };
+  desenhar();
 }
+
+// fecha as caixas suspensas ao clicar fora delas
+document.addEventListener('mousedown', (e) => {
+  document.querySelectorAll('.dropdown').forEach((dd) => {
+    const painel = dd.querySelector('.dd-painel');
+    if (painel && !dd.contains(e.target)) painel.hidden = true;
+  });
+});
 
 // ---------------------------------------------------------------------
 // Regra de exibição: Top N / Outros / 80% do RCD
@@ -565,6 +611,8 @@ function lerExibicao() {
   };
   $('exib-topn').disabled = estado.exib.auto80;
   $('exib-outros').disabled = estado.exib.auto80;
+  // a linha "Outros" muda de conteúdo: a seleção feita na tabela deixa de valer
+  if (estado.selecao.size) limparSelecao();
   desenharGraficos();
   desenharTabela();
 }
@@ -572,6 +620,17 @@ function lerExibicao() {
 // ---------------------------------------------------------------------
 // Página 2: KPIs, gráficos e tabela
 // ---------------------------------------------------------------------
+// Tabela e KPIs usam MAT quando o Tempo é "Mês"
+const tempoTabela = () => ($('sel-tempo').value === 'YTD' ? 'YTD' : 'MAT');
+
+// Filtros da página Filtros + linhas clicadas na tabela (só nesta página)
+function whereAnalise() {
+  const base = clausulaWhere(null);
+  if (!estado.selecao.size) return base;
+  const sel = '(' + [...estado.selecao.values()].join(' OR ') + ')';
+  return base ? `${base} AND ${sel}` : `WHERE ${sel}`;
+}
+
 function trocarPagina(pagina) {
   estado.pagina = pagina;
   document.querySelectorAll('.aba').forEach((b) => b.classList.toggle('ativa', b.dataset.pagina === pagina));
@@ -585,12 +644,11 @@ function trocarPagina(pagina) {
 
 async function atualizarAnalise() {
   estado.analisePendente = false;
-  const tempo = $('sel-tempo').value;
-  const where = clausulaWhere(null);
+  estado.selecao.clear();
   await Promise.all([
-    atualizarKpis(tempo, where),
-    atualizarGraficos(tempo, where),
-    atualizarTabela(tempo, where),
+    atualizarKpis(tempoTabela(), whereAnalise()),
+    atualizarGraficos(),
+    atualizarTabela(),
   ]);
 }
 
@@ -619,21 +677,37 @@ async function atualizarKpis(T, where) {
 }
 
 // ----- Gráficos -----
-const CAMPOS_GRAFICO = ['r0', 'r1', 'r2', 'r3', 'r4', 'u0', 'u1', 'u2', 'u3', 'u4'];
 let ultimoGrafico = null;
 
-async function atualizarGraficos(T, where) {
+// Colunas e rótulos do eixo X conforme o Tempo
+function periodosGrafico() {
+  const tempo = $('sel-tempo').value;
+  if (tempo === 'MES') {
+    return { mes: true, rotulos: estado.meses, colunas: estado.meses.map((_, i) => `m${i}`) };
+  }
+  return {
+    mes: false,
+    rotulos: [`${tempo}-4`, `${tempo}-3`, `${tempo}-2`, `${tempo}-1`, tempo],
+    colunas: [4, 3, 2, 1, 0].map((k) => `${tempo}${k}`),
+  };
+}
+
+async function atualizarGraficos() {
   const dims = estado.dimsGrafico;
+  const per = periodosGrafico();
   const grupo = dims.length ? `concat_ws(' | ', ${dims.map(exprDim).join(', ')})` : `'Total'`;
-  const somas = [0, 1, 2, 3, 4].map((k) => `SUM(rcd_${T}${k}) r${k}, SUM(und_${T}${k}) u${k}`).join(', ');
-  const linhas = await consultar(`SELECT ${grupo} AS g, ${somas} FROM fato ${where} GROUP BY 1`);
-  ultimoGrafico = { linhas, T };
+  const somas = per.colunas.map((c, i) => `SUM(rcd_${c}) r_${i}, SUM(und_${c}) u_${i}`).join(', ');
+  const linhas = await consultar(`SELECT ${grupo} AS g, ${somas} FROM fato ${whereAnalise()} GROUP BY 1`);
+  const ultimo = per.colunas.length - 1;
+  for (const l of linhas) l.r0 = l['r_' + ultimo]; // ranking pelo RCD do período mais recente
+  ultimoGrafico = { linhas, per };
   desenharGraficos();
 }
 
 function desenharGraficos() {
   if (!ultimoGrafico) return;
-  const { linhas, T } = ultimoGrafico;
+  const { linhas, per } = ultimoGrafico;
+  const campos = per.colunas.flatMap((_, i) => ['r_' + i, 'u_' + i]);
   const regra = aplicarExibicao(linhas);
   let manter = regra.manter;
   let outros = regra.outros;
@@ -646,69 +720,143 @@ function desenharGraficos() {
   const grupos = manter.map((l, i) => ({ nome: l.g, linha: l, cor: CORES[i % CORES.length] }));
   if (outros.length) {
     const soma = { g: 'Outros' };
-    for (const l of outros) somarCampos(soma, l, CAMPOS_GRAFICO);
+    for (const l of outros) somarCampos(soma, l, campos);
     grupos.push({ nome: 'Outros', linha: soma, cor: COR_OUTROS });
   }
   // o total escrito acima da barra é sempre 100% dos dados filtrados
-  const totalGeral = somarCampos({}, {}, CAMPOS_GRAFICO);
-  for (const l of linhas) somarCampos(totalGeral, l, CAMPOS_GRAFICO);
+  const totalGeral = {};
+  for (const l of linhas) somarCampos(totalGeral, l, campos);
 
-  const eixoX = [`${T}-4`, `${T}-3`, `${T}-2`, `${T}-1`, T];
-  desenharGrafico('grafico-rcd', grupos, 'r', eixoX, totalGeral);
-  desenharGrafico('grafico-und', grupos, 'u', eixoX, totalGeral);
+  const tipo = $('sel-tipo').value;
+  desenharGrafico('grafico-rcd', grupos, 'r_', per, totalGeral, tipo);
+  desenharGrafico('grafico-und', grupos, 'u_', per, totalGeral, tipo);
   $('nota-grafico').textContent = nota;
 }
 
-function desenharGrafico(id, grupos, prefixo, eixoX, totalGeral) {
+// texto escuro sobre cores claras e branco sobre cores escuras
+function corTexto(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.6 ? '#2B2B2B' : '#FFFFFF';
+}
+
+// índices que recebem rótulo numa linha do modo Mês: início, fim, máximo e mínimo
+function pontosChave(valores) {
+  if (!valores.length) return new Set();
+  let iMax = 0, iMin = 0;
+  valores.forEach((v, i) => { if (v > valores[iMax]) iMax = i; if (v < valores[iMin]) iMin = i; });
+  return new Set([0, valores.length - 1, iMax, iMin]);
+}
+
+function desenharGrafico(id, grupos, prefixo, per, totalGeral, tipo) {
   const el = $(id);
   if (!estado.graficos[id]) estado.graficos[id] = echarts.init(el);
   const grafico = estado.graficos[id];
+  const n = per.colunas.length;
+  const mes = per.mes;
 
-  const valores = grupos.map((g) => [4, 3, 2, 1, 0].map((k) => g.linha[prefixo + k] || 0));
-  const totais = [4, 3, 2, 1, 0].map((k) => totalGeral[prefixo + k] || 0);
+  const valores = grupos.map((g) => per.colunas.map((_, i) => g.linha[prefixo + i] || 0));
+  const totais = per.colunas.map((_, i) => totalGeral[prefixo + i] || 0);
+  const empilhado = tipo === 'empilhado' || tipo === 'cem' || tipo === 'areas';
+  const cem = tipo === 'cem';
+  const ehBarra = tipo === 'empilhado' || tipo === 'cem' || tipo === 'agrupado';
+  const fracao = (v, i) => (totais[i] > 0 ? v / totais[i] : null);
+  // no modo Mês só os segmentos bem grandes recebem rótulo interno
+  const limiteRotulo = mes ? 0.15 : 0.08;
+  // e só nos meses-chave (início, fim, máximo e mínimo do total)
+  const mesesChave = pontosChave(totais);
+  const rotuloInterno = (v, i) => {
+    const f = fracao(v, i);
+    return f !== null && f >= limiteRotulo && (!mes || mesesChave.has(i));
+  };
 
-  const series = grupos.map((g, gi) => ({
-    name: g.nome,
-    type: 'bar',
-    stack: 'total',
-    itemStyle: { color: g.cor },
-    barMaxWidth: 70,
-    emphasis: { focus: 'series' },
-    data: valores[gi].map((v, i) => ({
-      value: v,
-      label: { show: totais[i] > 0 && v / totais[i] >= 0.08 },
-    })),
-    label: {
-      position: 'inside',
-      color: '#fff',
-      fontSize: 10,
-      textBorderColor: 'rgba(0,0,0,.45)',
-      textBorderWidth: 2,
-      formatter: (p) => `${abreviar(p.value)}\n${percentual(p.value / totais[p.dataIndex])}`,
-    },
-  }));
-  // série invisível só para escrever o total acima de cada barra
-  series.push({
-    name: '__total', type: 'line', data: totais, symbol: 'none', silent: true,
-    lineStyle: { opacity: 0 }, tooltip: { show: false },
-    label: { show: true, position: 'top', fontWeight: 'bold', color: '#333', formatter: (p) => abreviar(p.value) },
+  const series = grupos.map((g, gi) => {
+    const dados = valores[gi];
+    const chave = pontosChave(dados);
+    const serie = {
+      name: g.nome,
+      type: ehBarra ? 'bar' : 'line',
+      itemStyle: { color: g.cor },
+      emphasis: { focus: 'series' },
+      barMaxWidth: 70,
+    };
+    if (empilhado) serie.stack = 'total';
+    if (tipo === 'areas') Object.assign(serie, { areaStyle: { opacity: 0.85 }, lineStyle: { width: 1 }, symbol: 'none' });
+    if (tipo === 'linhas') Object.assign(serie, { symbolSize: mes ? 3 : 6, lineStyle: { width: 2 } });
+
+    const corRotulo = corTexto(g.cor);
+    if (tipo === 'empilhado' || tipo === 'cem') {
+      serie.data = dados.map((v, i) => ({
+        value: cem ? (fracao(v, i) ?? 0) * 100 : v,
+        bruto: v,
+        label: { show: rotuloInterno(v, i) },
+      }));
+      serie.label = {
+        position: 'inside', color: corRotulo, fontSize: mes ? 9 : 10, rotate: mes ? 90 : 0,
+        formatter: (p) => (mes ? `${abreviar(p.data.bruto)} · ${percentual(fracao(p.data.bruto, p.dataIndex))}`
+          : `${abreviar(p.data.bruto)}\n${percentual(fracao(p.data.bruto, p.dataIndex))}`),
+      };
+    } else if (tipo === 'agrupado') {
+      const mostrar = !mes && grupos.length <= 4;
+      serie.data = dados.map((v) => ({ value: v, bruto: v }));
+      serie.label = { show: mostrar, position: 'top', color: '#2B2B2B', fontSize: 9, formatter: (p) => abreviar(p.value) };
+    } else if (tipo === 'linhas') {
+      serie.data = dados.map((v, i) => ({ value: v, bruto: v, label: { show: !mes || chave.has(i) } }));
+      serie.label = { position: 'top', color: '#2B2B2B', fontSize: 9, formatter: (p) => abreviar(p.value) };
+    } else { // áreas: os rótulos ficam só no total
+      serie.data = dados.map((v) => ({ value: v, bruto: v }));
+    }
+    return serie;
   });
 
+  // total escrito acima das barras/áreas empilhadas (série invisível)
+  if (empilhado) {
+    const chaveTotal = pontosChave(totais);
+    series.push({
+      // o rótulo de linha só aparece se houver marcador: marcador invisível
+      name: '__total', type: 'line', silent: true, symbol: 'circle', symbolSize: 1, itemStyle: { color: 'rgba(0,0,0,0)' },
+      lineStyle: { opacity: 0 }, tooltip: { show: false },
+      data: totais.map((t, i) => ({
+        value: cem ? 100 : t,
+        bruto: t,
+        label: { show: !mes || tipo === 'empilhado' || tipo === 'cem' || chaveTotal.has(i) },
+      })),
+      label: {
+        position: 'top', fontWeight: 'bold', color: '#2B2B2B',
+        fontSize: mes ? 9 : 11, rotate: mes && tipo !== 'areas' ? 90 : 0,
+        align: mes && tipo !== 'areas' ? 'left' : 'center',
+        verticalAlign: 'middle',
+        distance: mes && tipo !== 'areas' ? 4 : 6,
+        formatter: (p) => abreviar(p.data.bruto),
+      },
+    });
+  }
+
+  const maxTotal = Math.max(0, ...totais);
   grafico.setOption({
     animation: false,
     tooltip: {
       trigger: 'item',
-      formatter: (p) => `${escaparHtml(p.seriesName)}<br>${p.name}: <b>${inteiro(p.value)}</b> (${percentual(p.value / totais[p.dataIndex])})`,
+      formatter: (p) => {
+        const bruto = p.data && p.data.bruto !== undefined ? p.data.bruto : p.value;
+        return `${escaparHtml(p.seriesName)}<br>${p.name}: <b>${inteiro(bruto)}</b> (${percentual(fracao(bruto, p.dataIndex))})`;
+      },
     },
     legend: {
       type: 'scroll', orient: 'vertical', right: 6, top: 'middle',
       data: grupos.map((g) => g.nome),
-      formatter: (n) => (n.length > 28 ? n.slice(0, 27) + '…' : n),
+      formatter: (nome) => (nome.length > 28 ? nome.slice(0, 27) + '…' : nome),
       textStyle: { fontSize: 11 },
     },
-    grid: { left: 50, right: 190, top: 30, bottom: 30 },
-    xAxis: { type: 'category', data: eixoX },
-    yAxis: { type: 'value', max: (v) => Math.max(v.max, ...totais) * 1.12, axisLabel: { formatter: abreviar } },
+    grid: { left: 50, right: 190, top: mes ? 50 : 30, bottom: mes ? 50 : 30 },
+    labelLayout: mes ? { hideOverlap: true } : undefined,
+    xAxis: {
+      type: 'category', data: per.rotulos, boundaryGap: ehBarra || n === 1,
+      axisLabel: { rotate: mes ? 90 : 0, fontSize: mes ? 9 : 12 },
+    },
+    yAxis: cem
+      ? { type: 'value', max: 100, axisLabel: { formatter: (v) => v + '%' } }
+      : { type: 'value', max: (v) => Math.max(v.max, empilhado ? maxTotal : 0) * (mes ? 1.18 : 1.12), axisLabel: { formatter: abreviar } },
     series,
   }, true);
   grafico.resize();
@@ -730,8 +878,8 @@ const COLUNAS_TABELA = (T) => [
   { id: 'cgU', titulo: 'CAGR 5Y UND', tipo: 'var' },
 ];
 
-function novoNo(nome, nivel, caminho) {
-  const no = { nome, nivel, caminho, filhos: new Map() };
+function novoNo(nome, nivel, caminho, valores) {
+  const no = { nome, nivel, caminho, valores, filhos: new Map() };
   for (const c of CAMPOS_TABELA) no[c] = 0;
   return no;
 }
@@ -747,25 +895,30 @@ function completarNo(no, total) {
   no.cgU = cagr(no.u0, no.u4);
 }
 
+// A tabela usa só os filtros da página Filtros (não a própria seleção)
 let ultimaTabela = null;
-async function atualizarTabela(T, where) {
+async function atualizarTabela() {
+  const T = tempoTabela();
   const dims = estado.dimsTabela;
   const grupos = dims.map((k, i) => `${exprDim(k)} AS g${i}`);
   const linhas = await consultar(`SELECT ${grupos.length ? grupos.join(', ') + ',' : ''}
       SUM(rcd_${T}0) r0, SUM(rcd_${T}1) r1, SUM(rcd_${T}4) r4,
       SUM(und_${T}0) u0, SUM(und_${T}1) u1, SUM(und_${T}4) u4,
       SUM(dos_${T}0) d0
-    FROM fato ${where} ${grupos.length ? 'GROUP BY ALL' : ''}`);
+    FROM fato ${clausulaWhere(null)} ${grupos.length ? 'GROUP BY ALL' : ''}`);
 
   // monta a árvore: cada nível soma os valores dos níveis abaixo
-  const raiz = novoNo('Total', -1, '');
+  const raiz = novoNo('Total', -1, '', []);
   for (const l of linhas) {
     let no = raiz;
     somarCampos(raiz, l, CAMPOS_TABELA);
     dims.forEach((_, i) => {
       const valor = l['g' + i];
       let filho = no.filhos.get(valor);
-      if (!filho) { filho = novoNo(valor, i, no.caminho + SEP + valor); no.filhos.set(valor, filho); }
+      if (!filho) {
+        filho = novoNo(valor, i, no.caminho + SEP + valor, [...no.valores, valor]);
+        no.filhos.set(valor, filho);
+      }
       somarCampos(filho, l, CAMPOS_TABELA);
       no = filho;
     });
@@ -791,13 +944,28 @@ function filhosVisiveis(no, raiz) {
   const regra = aplicarExibicao([...no.filhos.values()]);
   const lista = ordenarIrmaos(regra.manter);
   if (regra.outros.length) {
-    const outros = novoNo('Outros', no.nivel + 1, no.caminho + SEP + '__outros__');
+    const outros = novoNo('Outros', no.nivel + 1, no.caminho + SEP + '__outros__', no.valores);
     outros.ehOutros = true;
+    outros.membros = regra.outros.map((f) => f.nome);
     for (const f of regra.outros) somarCampos(outros, f, CAMPOS_TABELA);
     completarNo(outros, raiz);
     lista.push(outros);
   }
   return { lista, escondidos: regra.escondidos };
+}
+
+// Condição SQL equivalente a uma linha: a combinação de valores até o nível dela
+function condicaoLinha(no, dims) {
+  const partes = no.valores.map((v, i) => `${exprDim(dims[i])} = ${sqlTexto(v)}`);
+  if (no.ehOutros) partes.push(`${exprDim(dims[no.nivel])} IN (${no.membros.map(sqlTexto).join(', ')})`);
+  return partes.length ? '(' + partes.join(' AND ') + ')' : 'TRUE';
+}
+
+function linhaSelecionada(caminho) {
+  for (const c of estado.selecao.keys()) {
+    if (caminho === c || caminho.startsWith(c + SEP)) return true;
+  }
+  return false;
 }
 
 function desenharTabela() {
@@ -851,21 +1019,29 @@ function desenharTabela() {
       ${colunas.map((c) => `<th data-col="${c.id}" class="${col === c.id ? 'ordenada' : ''}">${c.titulo}${seta(c.id)}</th>`).join('')}
     </tr></thead>`;
 
-  estado.caminhosTabela = visiveis.map((l) => l.caminho);
+  const haSelecao = estado.selecao.size > 0;
+  estado.linhasTabela = visiveis;
   const corpo = '<tbody>' + visiveis.map((l, i) => {
     const podeAbrir = !l.ehOutros && l.nivel < ultimoNivel;
     const aberto = estado.expandidos.has(l.caminho);
     const botao = podeAbrir
       ? `<button class="btn-exp" data-i="${i}" title="${aberto ? 'Recolher' : 'Expandir'}">${aberto ? '−' : '+'}</button>`
       : '<span class="btn-exp-vazio"></span>';
-    return `<tr class="nivel-${Math.min(l.nivel, 3)}${l.ehOutros ? ' linha-outros' : ''}">
+    const classes = [`nivel-${Math.min(l.nivel, 3)}`];
+    if (l.ehOutros) classes.push('linha-outros');
+    if (haSelecao) classes.push(estado.selecao.has(l.caminho) ? 'selecionada' : linhaSelecionada(l.caminho) ? '' : 'apagada');
+    return `<tr class="${classes.join(' ')}" data-i="${i}">
       <td style="padding-left:${8 + l.nivel * 20}px">${botao}${escaparHtml(l.nome)}</td>
       ${colunas.map((c) => celula(l, c, true)).join('')}</tr>`;
   }).join('') + '</tbody>';
   const rodape = `<tfoot><tr><td>Total</td>${colunas.map((c) => celula(raiz, c, false)).join('')}</tr></tfoot>`;
 
   $('tabela').innerHTML = cabecalho + corpo + rodape;
-  document.querySelector('.barra-tabela').hidden = dims.length < 2;
+  $('btn-expandir').hidden = $('btn-recolher').hidden = dims.length < 2;
+  $('btn-limpar-selecao').hidden = !haSelecao;
+  $('dica-selecao').textContent = haSelecao
+    ? `${estado.selecao.size} ${estado.selecao.size > 1 ? 'linhas selecionadas filtram' : 'linha selecionada filtra'} os gráficos e os cards.`
+    : 'Clique em uma linha para filtrar os gráficos (Ctrl+clique para várias).';
   const notas = [];
   if (cortou) notas.push(`Mostrando as primeiras ${inteiro(MAX_LINHAS_TABELA)} linhas.`);
   if (escondidos) notas.push(`${inteiro(escondidos)} linhas fora do Top N não aparecem.`);
@@ -881,6 +1057,32 @@ function expandirTudo() {
   });
   abrir(raiz);
   desenharTabela();
+}
+
+// Clique na linha: filtra gráficos e cards. Ctrl+clique acumula.
+function clicarLinha(linha, acumular) {
+  const { caminho } = linha;
+  const cond = condicaoLinha(linha, ultimaTabela.dims);
+  if (acumular) {
+    if (estado.selecao.has(caminho)) estado.selecao.delete(caminho);
+    else estado.selecao.set(caminho, cond);
+  } else if (estado.selecao.has(caminho) && estado.selecao.size === 1) {
+    estado.selecao.clear();
+  } else {
+    estado.selecao = new Map([[caminho, cond]]);
+  }
+  aplicarSelecao();
+}
+
+function limparSelecao() {
+  estado.selecao.clear();
+  aplicarSelecao();
+}
+
+function aplicarSelecao() {
+  desenharTabela();
+  atualizarKpis(tempoTabela(), whereAnalise());
+  atualizarGraficos();
 }
 
 // ---------------------------------------------------------------------
@@ -914,24 +1116,30 @@ $('btn-trocar').addEventListener('click', () => {
 document.querySelectorAll('.aba').forEach((b) => b.addEventListener('click', () => trocarPagina(b.dataset.pagina)));
 $('btn-zerar').addEventListener('click', zerarFiltros);
 $('sel-tempo').addEventListener('change', atualizarAnalise);
+$('sel-tipo').addEventListener('change', desenharGraficos);
 $('exib-topn').addEventListener('input', lerExibicao);
 $('exib-outros').addEventListener('change', lerExibicao);
 $('exib-80').addEventListener('change', lerExibicao);
 $('btn-expandir').addEventListener('click', expandirTudo);
 $('btn-recolher').addEventListener('click', () => { estado.expandidos = new Set(); desenharTabela(); });
+$('btn-limpar-selecao').addEventListener('click', limparSelecao);
 $('tabela').addEventListener('click', (e) => {
   const botao = e.target.closest('.btn-exp');
   if (botao) {
-    const caminho = estado.caminhosTabela[Number(botao.dataset.i)];
+    const { caminho } = estado.linhasTabela[Number(botao.dataset.i)];
     if (estado.expandidos.has(caminho)) estado.expandidos.delete(caminho);
     else estado.expandidos.add(caminho);
     desenharTabela();
     return;
   }
   const th = e.target.closest('th');
-  if (!th) return;
-  const col = th.dataset.col;
-  estado.ordem = estado.ordem.col === col ? { col, desc: !estado.ordem.desc } : { col, desc: col !== 'nome' };
-  desenharTabela();
+  if (th) {
+    const col = th.dataset.col;
+    estado.ordem = estado.ordem.col === col ? { col, desc: !estado.ordem.desc } : { col, desc: col !== 'nome' };
+    desenharTabela();
+    return;
+  }
+  const tr = e.target.closest('tbody tr');
+  if (tr) clicarLinha(estado.linhasTabela[Number(tr.dataset.i)], e.ctrlKey || e.metaKey);
 });
 window.addEventListener('resize', () => Object.values(estado.graficos).forEach((g) => g.resize()));
