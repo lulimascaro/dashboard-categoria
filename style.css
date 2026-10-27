@@ -654,7 +654,9 @@ body.com-el .chave-el { background: var(--amarelo); color: #333; }
 .lanc-faixa select { max-width: 110px !important; }
 .barra-lanc { gap: 14px 20px; }
 .leg-media { width: 18px; height: 0; border-top: 2px dashed #000; flex-shrink: 0; }
-.cel-meses { color: #888; font-size: 11px; margin-left: 4px; }
+#tabela-lanc th.grupo-ano { text-align: center; border-bottom: 2px solid var(--amarelo); border-left: 1px solid #fff4; cursor: default; }
+#tabela-lanc thead tr.sub th { font-size: 11.5px; }
+#tabela-lanc td.parcial span, #tabela-lanc td.parcial { color: #999; font-style: italic; }
 .lanc-data { color: #555; }
 .barra-seletores label.caixa-clara { font-weight: 600; cursor: pointer; gap: 6px; }
 .barra-seletores label.caixa-clara input { accent-color: var(--amarelo); }
@@ -666,3 +668,4 @@ body.com-el .chave-el { background: var(--amarelo); color: #333; }
 .ec-leg-estilos { border-top: 1px solid #E3E3E3; margin-top: 4px; padding-top: 4px; }
 .ec-traco { width: 22px; height: 0; border-top: 2px solid #333; flex-shrink: 0; }
 .ec-traco.ec-tracejado { border-top-style: dashed; }
+#tabela-lanc thead tr.sub th:first-child { text-align: right; }

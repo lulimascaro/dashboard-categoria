@@ -317,9 +317,10 @@ function desenharBarras(grupos, medida, nomeMedida) {
 }
 
 function desenharEstoque(grupos) {
-  for (const [id, campo, titulo, fmtV] of [
-    ['ec-g-estoque', 'estUn', 'Estoque UN (k)', (v) => abreviar(v * 1000)],
-    ['ec-g-dias', 'estDia', 'Dias de estoque', (v) => inteiro(v)],
+  // Dias de estoque começa no Mês 4: nos primeiros meses os dias distorcem a escala
+  for (const [id, campo, titulo, fmtV, inicio] of [
+    ['ec-g-estoque', 'estUn', 'Estoque UN (k)', (v) => abreviar(v * 1000), 0],
+    ['ec-g-dias', 'estDia', 'Dias de estoque (a partir do Mês 4)', (v) => inteiro(v), 3],
   ]) {
     const g = grafico(id);
     g.setOption({
@@ -328,13 +329,13 @@ function desenharEstoque(grupos) {
       legend: legendaOculta(grupos),
       tooltip: { trigger: 'axis', valueFormatter: fmtV },
       grid: { left: 52, right: 14, top: 34, bottom: 34 },
-      xAxis: { type: 'category', data: MESES, axisLabel: { fontSize: 9, hideOverlap: true } },
+      xAxis: { type: 'category', data: MESES.slice(inicio), axisLabel: { fontSize: 9, hideOverlap: true } },
       yAxis: { type: 'value', axisLabel: { fontSize: 10, formatter: fmtV } },
       series: grupos.map((gr, gi) => ({
         name: gr.nome, type: 'line', symbolSize: 5, itemStyle: { color: gr.cor }, lineStyle: { width: 2 },
         // meses negativos: ponto vermelho; o valor aparece só no pior mês
         data: (() => {
-          const vals = gr.meses.map((m) => m[campo]);
+          const vals = gr.meses.slice(inicio).map((m) => m[campo]);
           const minimo = Math.min(...vals.filter(valido));
           const iMin = vals.indexOf(minimo); // rótulo só na primeira vez que o pior valor aparece
           return vals.map((v, i) => (valido(v) && v < 0
@@ -343,7 +344,7 @@ function desenharEstoque(grupos) {
             : { value: v }));
         })(),
         markLine: gi === 0 ? {
-          silent: true, symbol: 'none', data: [{ yAxis: 0, lineStyle: { color: VERMELHO, width: 1 } }, { xAxis: 11.5, lineStyle: { color: '#045b7b', type: 'dashed' } }],
+          silent: true, symbol: 'none', data: [{ yAxis: 0, lineStyle: { color: VERMELHO, width: 1 } }, { xAxis: 11.5 - inicio, lineStyle: { color: '#045b7b', type: 'dashed' } }],
           label: { show: false },
         } : undefined,
         // faixa vermelho-clara abaixo de zero

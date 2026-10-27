@@ -2996,11 +2996,11 @@ function estiloProj(projetado) {
 // ligado, as ELs também são lançamentos (Mês 1 da EL = mês de lançamento).
 // =====================================================================
 const LANC = '__lanc'; // dimensão "Lançamento" (apresentação ou marca, conforme o Nível)
-const CAMPOS_LANC = ['rA', 'uA', 'pfA', 'rcA', 'r12', 'u12', 'mat0'];
+const CAMPOS_LANC = ['rA', 'uA', 'pfA', 'rcA', 'r12', 'u12', 'mat0', 'rY0', 'rY1', 'rY2', 'uY0', 'uY1', 'uY2'];
 const COR_MEDIA = '#000000';
 estado.lanc = {
   dimsGrafico: [LANC], dimsTabela: [LANC], expandidos: new Set(), selecao: new Map(), ocultas: new Set(),
-  ordem: { col: 'rA', desc: true }, exib: { topN: null, outros: false, auto80: false },
+  ordem: { col: 'ar0', desc: true }, exib: { topN: null, outros: false, auto80: false },
   dados: null, calc: null, tabela: null, linhas: [],
 };
 estado.lancPendente = true;
@@ -3022,7 +3022,7 @@ function prepararLanc() {
   L.expandidos = new Set();
   L.selecao = new Map();
   L.ocultas = new Set();
-  L.ordem = { col: 'rA', desc: true };
+  L.ordem = { col: 'ar0', desc: true };
   const opcoes = estado.meses.map((m, i) => `<option value="${i}">${m}</option>`).join('');
   $('lanc-ini').innerHTML = opcoes;
   $('lanc-fim').innerHTML = opcoes;
@@ -3077,7 +3077,7 @@ async function atualizarLanc() {
   for (let t = 0; t < NT; t++) {
     const c = t < N ? `m${t}` : `p${t - N}`;
     for (const m of ['rcd', 'und', 'pf', 'rc']) valores.push(`${colExpr(m, c)} AS ${m}_${t}`);
-    mercado.push(`SUM(${colExpr('und', c)}) AS u_${t}`);
+    mercado.push(`SUM(${colExpr('und', c)}) AS u_${t}`, `SUM(${colExpr('rcd', c)}) AS r_${t}`);
   }
   const where = clausulaWhere(null);
   const [linhas, [merc]] = await Promise.all([
@@ -3098,7 +3098,11 @@ async function atualizarLanc() {
     }
     return it;
   });
-  L.dados = { itens, N, NT, mercadoU: Array.from({ length: NT }, (_, t) => merc['u_' + t] || 0), rmat: merc.rmat };
+  L.dados = {
+    itens, N, NT, rmat: merc.rmat,
+    mercadoU: Array.from({ length: NT }, (_, t) => merc['u_' + t] || 0),
+    mercadoR: Array.from({ length: NT }, (_, t) => merc['r_' + t] || 0),
+  };
   calcularLanc();
   desenharLancTudo();
 }
@@ -3118,25 +3122,43 @@ function calcularLanc() {
     // SKUs reais param no último mês da base; as ELs seguem pelos 12 meses do MAT+1
     const fimDados = it.el ? NT : N;
     it.pos = []; // posição do eixo -> mês da base (null = sem dado: antes do lançamento ou depois da base)
-    let mesesH = 0;
     for (const c of ['rA', 'uA', 'pfA', 'rcA']) it[c] = 0;
     for (let k = 0; k < posicoes; k++) {
       const t = tempo(it, k);
       const ok = t >= it.L && t < fimDados;
       it.pos.push(ok ? t : null);
       if (!ok) continue;
-      mesesH++;
       it.rA += it.r[t]; it.uA += it.u[t]; it.pfA += it.p[t]; it.rcA += it.c[t];
     }
     const t12 = it.L + 11;
     it.t12 = t12 < fimDados ? t12 : null;
     it.r12 = it.t12 !== null ? it.r[t12] : 0;
     it.u12 = it.t12 !== null ? it.u[t12] : 0;
-    it.info = { L: it.L, mesesH, t12: it.t12 };
+    it.info = { L: it.L, t12: it.t12 };
+  }
+  // Ano 1 = Meses 1–12 desde o lançamento, Ano 2 = 13–24, Ano 3 = 25–36 (quantos o Horizonte pedir).
+  // O mercado de cada ano é somado nos MESMOS meses do calendário daquele ano do lançamento.
+  const nAnos = Math.round(H / 12);
+  const { mercadoR, mercadoU } = L.dados;
+  const fimUnidade = new Map();
+  for (const it of itens) fimUnidade.set(it.unidade, Math.max(fimUnidade.get(it.unidade) || 0, it.el ? NT : N));
+  for (const it of itens) {
+    const fim = fimUnidade.get(it.unidade);
+    it.info.anos = [];
+    for (let a = 0; a < 3; a++) {
+      let r = 0, u = 0, meses = 0, mR = 0, mU = 0;
+      for (let j = 0; j < 12 && a < nAnos; j++) {
+        const t = it.L + 12 * a + j;
+        if (t >= fim) break;
+        meses++; r += it.r[t]; u += it.u[t]; mR += mercadoR[t]; mU += mercadoU[t];
+      }
+      it['rY' + a] = r; it['uY' + a] = u;
+      it.info.anos.push({ meses, mR, mU });
+    }
   }
   const projetado = new Set();
   if (!alinhado) for (let k = 0; k < posicoes; k++) if (inicio + k >= N) projetado.add(k);
-  L.calc = { H, alinhado, inicio, posicoes, rotulos, projetado };
+  L.calc = { H, alinhado, inicio, posicoes, rotulos, projetado, nAnos };
 }
 
 function itensSelecionadosLanc() {
@@ -3330,22 +3352,46 @@ function juntarNosLanc(destino, origem) {
   origem.unidades.forEach((v, k) => destino.unidades.set(k, v));
   if (origem.el) destino.el = true;
 }
-// Médias e Mês 12. MS% do Mês 12 = UND do lançamento ÷ UND do mercado filtrado naquele mês
+// Anos, Mês 12 e médias. MS% = valor do lançamento ÷ valor do mercado filtrado nos mesmos meses
 function completarNoLanc(no) {
-  const { N, mercadoU } = estado.lanc.dados;
-  let minL = Infinity, minMeses = Infinity, n12 = 0, mercado12 = 0;
+  const { N, mercadoU, mercadoR } = estado.lanc.dados;
+  const { nAnos } = estado.lanc.calc;
+  let minL = Infinity, maxL = -Infinity, n12 = 0, mercado12U = 0, mercado12R = 0;
   for (const inf of no.unidades.values()) {
     minL = Math.min(minL, inf.L);
-    minMeses = Math.min(minMeses, inf.mesesH);
-    if (inf.t12 !== null) { n12++; mercado12 += mercadoU[inf.t12] || 0; }
+    maxL = Math.max(maxL, inf.L);
+    if (inf.t12 !== null) { n12++; mercado12U += mercadoU[inf.t12] || 0; mercado12R += mercadoR[inf.t12] || 0; }
   }
   no.nLanc = no.unidades.size;
   no.L = no.nLanc ? minL : null;
+  no.Lfim = no.nLanc ? maxL : null;
   no.meses = no.nLanc ? N - minL : null;
-  no.mesesH = no.nLanc ? minMeses : null;
   no.r12v = n12 ? no.r12 : null;
   no.u12v = n12 ? no.u12 : null;
-  no.ms12 = n12 ? divisao(no.u12, mercado12) : null;
+  no.ms12 = n12 ? divisao(no.u12, mercado12U) : null;
+  no.msr12 = n12 ? divisao(no.r12, mercado12R) : null;
+  // cada ano soma só os lançamentos que já têm dado naquele ano
+  no.anos = [];
+  for (let a = 0; a < nAnos; a++) {
+    let n = 0, parciais = 0, minMeses = 12, mR = 0, mU = 0;
+    for (const inf of no.unidades.values()) {
+      const y = inf.anos[a];
+      if (!y.meses) continue;
+      n++; mR += y.mR; mU += y.mU;
+      if (y.meses < 12) { parciais++; minMeses = Math.min(minMeses, y.meses); }
+    }
+    no.anos.push({ n, parciais, minMeses });
+    no['ar' + a] = n ? no['rY' + a] : null;
+    no['au' + a] = n ? no['uY' + a] : null;
+    no['amr' + a] = n ? divisao(no['rY' + a], mR) : null;
+    no['amu' + a] = n ? divisao(no['uY' + a], mU) : null;
+    if (a > 0) {
+      // um lançamento só: Evol. em branco se algum dos dois anos estiver incompleto
+      const incompleto = no.nLanc === 1 && (parciais || no.anos[a - 1].parciais);
+      no['aer' + a] = incompleto ? null : evolucao(no['ar' + a], no['ar' + (a - 1)]);
+      no['aeu' + a] = incompleto ? null : evolucao(no['au' + a], no['au' + (a - 1)]);
+    }
+  }
   no.pfU = divisao(no.pfA, no.uA);
   no.rcdU = divisao(no.rA, no.uA);
   no.rcU = divisao(no.rcA, no.uA);
@@ -3354,14 +3400,27 @@ function completarNoLanc(no) {
   no.r0 = no.rA; // Top N / 80% pelo RCD acumulado no horizonte
 }
 
-const COLUNAS_LANC = (H) => [
+const COLUNAS_LANC = (nAnos) => [
   { id: 'L', titulo: 'Data de lançamento', tipo: 'data' },
   { id: 'meses', titulo: 'Meses desde o lançamento', tipo: 'int' },
-  { id: 'rA', titulo: `RCD acumulado (${H} meses)`, tipo: 'num', cor: '#6B76A6', meses: true },
-  { id: 'uA', titulo: `UND acumulado (${H} meses)`, tipo: 'num', cor: '#A58BDB', meses: true },
-  { id: 'r12v', titulo: 'RCD no Mês 12', tipo: 'num', cor: '#6B76A6' },
-  { id: 'u12v', titulo: 'UND no Mês 12', tipo: 'num', cor: '#A58BDB' },
-  { id: 'ms12', titulo: 'MS% UND no Mês 12', tipo: 'pct', cor: '#F2C94C' },
+  ...Array.from({ length: nAnos }, (_, a) => {
+    const n = a + 1;
+    const grupo = `Ano ${n}`;
+    return [
+      { id: 'ar' + a, titulo: `RCD Ano ${n}`, tipo: 'num', cor: '#6B76A6', ano: a, grupo },
+      { id: 'au' + a, titulo: `UND Ano ${n}`, tipo: 'num', cor: '#A58BDB', ano: a, grupo },
+      ...(a > 0 ? [
+        { id: 'aer' + a, titulo: `Evol. RCD Ano ${n}`, tipo: 'var', ano: a, grupo },
+        { id: 'aeu' + a, titulo: `Evol. UND Ano ${n}`, tipo: 'var', ano: a, grupo },
+      ] : []),
+      { id: 'amr' + a, titulo: `MS% RCD Ano ${n}`, tipo: 'pct', cor: '#F2C94C', ano: a, grupo },
+      { id: 'amu' + a, titulo: `MS% UND Ano ${n}`, tipo: 'pct', cor: '#F2C94C', ano: a, grupo },
+    ];
+  }).flat(),
+  { id: 'r12v', titulo: 'RCD Mês 12', tipo: 'num', cor: '#6B76A6' },
+  { id: 'u12v', titulo: 'UND Mês 12', tipo: 'num', cor: '#A58BDB' },
+  { id: 'msr12', titulo: 'MS% RCD Mês 12', tipo: 'pct', cor: '#F2C94C' },
+  { id: 'ms12', titulo: 'MS% UND Mês 12', tipo: 'pct', cor: '#F2C94C' },
   { id: 'pfU', titulo: 'PF/UND', tipo: 'rs' },
   { id: 'rcdU', titulo: 'RCD/UND', tipo: 'rs' },
   { id: 'rcU', titulo: 'RC/UND', tipo: 'rs' },
@@ -3432,8 +3491,8 @@ function desenharTabelaLanc() {
   const L = estado.lanc;
   if (!L.tabela) return;
   const { raiz, dims } = L.tabela;
-  const { H, alinhado } = L.calc;
-  const colunas = COLUNAS_LANC(H);
+  const { H, alinhado, nAnos } = L.calc;
+  const colunas = COLUNAS_LANC(nAnos);
   const { col, desc } = L.ordem;
   const ultimoNivel = dims.length - 1;
 
@@ -3461,31 +3520,57 @@ function desenharTabelaLanc() {
   }
   const texto = (l, c) => {
     const v = l[c.id];
-    if (c.tipo === 'data') return valido(v) ? `<span class="lanc-data">${rotuloTempo(v)}</span>` : '-';
+    if (c.tipo === 'data') {
+      if (!valido(v)) return '-';
+      // várias datas (Total, grupos): intervalo do primeiro ao último lançamento
+      const fim = valido(l.Lfim) && l.Lfim !== v ? ` a ${rotuloTempo(l.Lfim)}` : '';
+      return `<span class="lanc-data">${rotuloTempo(v)}${fim}</span>`;
+    }
     if (c.tipo === 'int') return inteiro(v);
     if (c.tipo === 'rs') return reais(v);
-    if (c.tipo === 'pct') return percentual(v);
-    let s = inteiro(v);
-    // eixo alinhado: lançamento que ainda não completou o horizonte
-    if (c.meses && alinhado && l.nLanc === 1 && l.mesesH < H) s += `<span class="cel-meses">(${l.mesesH} meses)</span>`;
-    return s;
+    if (c.tipo === 'pct' || c.tipo === 'var') return percentual(v);
+    return inteiro(v);
   };
   const celula = (l, c, comBarra) => {
     const v = l[c.id];
-    const max = maximos[c.id + '|' + l.nivel];
-    if (comBarra && c.cor && max > 0 && valido(v) && v > 0) {
-      const largura = Math.min(100, (v / max) * 100);
-      return `<td class="cel-barra"><div class="barra" style="width:${largura}%;background:${c.cor}"></div><span>${texto(l, c)}</span></td>`;
+    const classes = [];
+    let dica = '';
+    if (c.ano !== undefined) {
+      const ano = l.anos[c.ano];
+      if (!ano.n || !valido(v)) return '<td></td>'; // ainda não chegou a este ano
+      if (ano.parciais && c.tipo !== 'var') {
+        classes.push('parcial');
+        dica = l.nLanc === 1 ? `ano incompleto: ${ano.minMeses} de 12 meses`
+          : `inclui ${ano.parciais} ${ano.parciais > 1 ? 'lançamentos' : 'lançamento'} com ano incompleto`;
+      }
     }
-    return `<td>${texto(l, c)}</td>`;
+    if (c.tipo === 'var') classes.push(classeSinal(v));
+    const max = maximos[c.id + '|' + l.nivel];
+    const barra = comBarra && c.cor && max > 0 && valido(v) && v > 0;
+    if (barra) classes.unshift('cel-barra');
+    const atrib = `class="${classes.join(' ')}"${dica ? ` title="${dica}"` : ''}`;
+    if (barra) {
+      const largura = Math.min(100, (v / max) * 100);
+      return `<td ${atrib}><div class="barra" style="width:${largura}%;background:${c.cor}"></div><span>${texto(l, c)}</span></td>`;
+    }
+    return `<td ${atrib}>${texto(l, c)}</td>`;
   };
 
   const seta = (id) => (col === id ? (desc ? ' ▼' : ' ▲') : '');
   const titulo = dims.length ? dims.map(rotuloDimLanc).join(' › ') : '(sem dimensão)';
-  const cabecalho = `<thead><tr>
-      <th data-col="nome" class="${col === 'nome' ? 'ordenada' : ''}">${escaparHtml(titulo)}${seta('nome')}</th>
-      ${colunas.map((c) => `<th data-col="${c.id}" class="${col === c.id ? 'ordenada' : ''}">${c.titulo}${seta(c.id)}</th>`).join('')}
-    </tr></thead>`;
+  // duas linhas de cabeçalho: grupos "Ano 1", "Ano 2"… em cima; colunas sem grupo ocupam as duas
+  const th = (c, extra = '') => `<th data-col="${c.id}" class="${col === c.id ? 'ordenada' : ''}"${extra}>${c.titulo}${seta(c.id)}</th>`;
+  let linha1 = `<th data-col="nome" rowspan="2" class="${col === 'nome' ? 'ordenada' : ''}">${escaparHtml(titulo)}${seta('nome')}</th>`;
+  for (let i = 0; i < colunas.length; i++) {
+    const c = colunas[i];
+    if (!c.grupo) { linha1 += th(c, ' rowspan="2"'); continue; }
+    let n = 1;
+    while (colunas[i + n] && colunas[i + n].grupo === c.grupo) n++;
+    linha1 += `<th class="grupo-ano" colspan="${n}">${c.grupo}</th>`;
+    i += n - 1;
+  }
+  const linha2 = colunas.filter((c) => c.grupo).map((c) => th(c)).join('');
+  const cabecalho = `<thead><tr>${linha1}</tr>${linha2 ? `<tr class="sub">${linha2}</tr>` : ''}</thead>`;
 
   const haSelecao = L.selecao.size > 0;
   const selecionada = (caminho) => [...L.selecao.keys()].some((c) => caminho === c || caminho.startsWith(c + SEP));
@@ -3506,6 +3591,9 @@ function desenharTabelaLanc() {
   const rodape = `<tfoot><tr><td>Total (${inteiro(raiz.nLanc)} lançamentos)</td>${colunas.map((c) => celula(raiz, c, false)).join('')}</tr></tfoot>`;
 
   $('tabela-lanc').innerHTML = cabecalho + corpo + rodape;
+  // a 2ª linha do cabeçalho fica fixa logo abaixo da 1ª ao rolar
+  const altura = $('tabela-lanc').querySelector('thead tr').getBoundingClientRect().height;
+  $('tabela-lanc').querySelectorAll('thead tr.sub th').forEach((x) => { x.style.top = altura + 'px'; });
   $('btn-expandir-lanc').hidden = $('btn-recolher-lanc').hidden = dims.length < 2;
   $('btn-limpar-selecao-lanc').hidden = !haSelecao;
   $('dica-selecao-lanc').textContent = haSelecao
@@ -3515,10 +3603,11 @@ function desenharTabelaLanc() {
   if (!raiz.nLanc) notas.push('Nenhum lançamento no período escolhido.');
   if (cortou) notas.push(`Mostrando as primeiras ${inteiro(MAX_LINHAS_TABELA)} linhas.`);
   if (escondidos) notas.push(`${inteiro(escondidos)} linhas fora do Top N não aparecem.`);
+  notas.push('Ano 1 = Meses 1–12 desde o lançamento, Ano 2 = 13–24, Ano 3 = 25–36. Cinza e itálico = ano incompleto (passe o mouse).');
+  notas.push('MS% = sobre o mercado filtrado nos mesmos meses do calendário.');
   notas.push(alinhado
-    ? `Acumulados e preços médios: do Mês 1 ao Mês ${H} de cada lançamento.`
-    : `Acumulados e preços médios: de ${rotuloTempo(L.calc.inicio)} até ${rotuloTempo(L.calc.inicio + L.calc.posicoes - 1)} (calendário).`);
-  notas.push('MS% UND no Mês 12 = sobre o mercado filtrado naquele mês.');
+    ? `Preços médios: do Mês 1 ao Mês ${H} de cada lançamento.`
+    : `Preços médios: de ${rotuloTempo(L.calc.inicio)} até ${rotuloTempo(L.calc.inicio + L.calc.posicoes - 1)} (calendário).`);
   $('nota-tabela-lanc').textContent = notas.join(' ');
 }
 
@@ -3582,6 +3671,7 @@ $('tabela-lanc').addEventListener('click', (e) => {
   const th = e.target.closest('th');
   if (th) {
     const col = th.dataset.col;
+    if (!col) return; // cabeçalho de grupo ("Ano 1"…) não ordena
     L.ordem = L.ordem.col === col ? { col, desc: !L.ordem.desc } : { col, desc: col !== 'nome' };
     desenharTabelaLanc();
     return;

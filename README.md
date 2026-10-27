@@ -29,6 +29,9 @@ A data de lançamento vem da coluna `Lancamento Apresentacao` (data do Excel, ex
 ou do primeiro mês com unidades vendidas. No nível "Produto/Marca", a marca é lançada no mês da sua
 primeira apresentação. O eixo pode ser o calendário ou "Mesmo ponto de partida" (Mês 1 = mês de
 lançamento de cada produto). Com "Incluir ELs e MAT+1" ligado, as ELs também entram como lançamentos.
+Na tabela, cada ano desde o lançamento (Ano 1 = Meses 1–12, Ano 2 = 13–24, Ano 3 = 25–36, conforme o
+Horizonte) tem RCD, UND, Evol. e MS% sobre o mercado filtrado nos mesmos meses; anos incompletos
+aparecem em cinza e itálico.
 
 O `exemplo.csv` tem 13 apresentações (10 marcas) com lançamentos fictícios entre out-23 e jun-26.
 
