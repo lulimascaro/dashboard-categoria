@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard de Mercado Farmacêutico</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+
+  <!-- ===== Tela de carregamento ===== -->
+  <section id="tela-inicial">
+    <div class="caixa-inicial">
+      <h1>Dashboard de Mercado Farmacêutico</h1>
+
+      <div class="aviso-privacidade">
+        <strong>🔒 Seus dados não saem do seu computador.</strong>
+        <p>O arquivo escolhido é lido e processado <b>somente dentro deste navegador</b>.
+          Nada é enviado para servidor algum e nada fica salvo no site.
+          Ao fechar ou recarregar a página, os dados são apagados da memória.</p>
+      </div>
+
+      <div class="botoes-inicial">
+        <label class="botao botao-principal">
+          📂 Carregar arquivo
+          <input type="file" id="input-arquivo" accept=".csv,text/csv" hidden>
+        </label>
+        <button class="botao botao-secundario" id="btn-exemplo">Usar dados de exemplo</button>
+      </div>
+      <p class="dica">Formato esperado: CSV exportado do Excel, separado por ";" (UTF-8 ou Latin-1).</p>
+
+      <div id="carregando" hidden>
+        <div class="spinner"></div>
+        <div id="carregando-texto">Preparando…</div>
+        <div class="barra-progresso"><div id="barra-progresso-preenchida"></div></div>
+      </div>
+      <div id="erro" hidden></div>
+    </div>
+  </section>
+
+  <!-- ===== Aplicação ===== -->
+  <div id="app" hidden>
+    <header class="topo">
+      <div class="topo-titulo">
+        <span class="titulo-app">Mercado Farmacêutico</span>
+        <span id="info-arquivo"></span>
+      </div>
+      <nav class="abas">
+        <button class="aba ativa" data-pagina="filtros">Filtros <span id="contador-filtros"></span></button>
+        <button class="aba" data-pagina="analise">Gráfico e Tabela</button>
+      </nav>
+      <button class="botao-link" id="btn-trocar">Trocar arquivo</button>
+    </header>
+
+    <!-- Página 1: Filtros -->
+    <main id="pagina-filtros" class="pagina">
+      <section class="secao">
+        <h2 class="faixa">MERCADO</h2>
+        <div class="grade-filtros" id="filtros-MERCADO"></div>
+      </section>
+      <section class="secao">
+        <h2 class="faixa">PRODUTO</h2>
+        <div class="grade-filtros" id="filtros-PRODUTO"></div>
+      </section>
+      <div class="rodape-filtros">
+        <button class="botao-zerar" id="btn-zerar">ZERAR FILTROS</button>
+      </div>
+    </main>
+
+    <!-- Página 2: Gráfico e Tabela -->
+    <main id="pagina-analise" class="pagina" hidden>
+      <div class="barra-seletores">
+        <label>Gráfico <select id="sel-grafico"></select></label>
+        <label>Tabela <select id="sel-tabela"></select></label>
+        <label>Tempo
+          <select id="sel-tempo">
+            <option value="MAT">MAT</option>
+            <option value="YTD">YTD</option>
+          </select>
+        </label>
+        <span id="resumo-filtros"></span>
+      </div>
+
+      <div class="layout-analise">
+        <aside class="coluna-kpis" id="kpis"></aside>
+        <div class="area-principal">
+          <div class="graficos">
+            <div class="card-grafico">
+              <h3 class="cab-rcd">RCD</h3>
+              <div class="grafico" id="grafico-rcd"></div>
+            </div>
+            <div class="card-grafico">
+              <h3 class="cab-und">UND</h3>
+              <div class="grafico" id="grafico-und"></div>
+            </div>
+          </div>
+          <div class="card-tabela">
+            <div class="tabela-rolagem">
+              <table id="tabela"></table>
+            </div>
+            <div id="nota-tabela"></div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+</body>
+</html>
