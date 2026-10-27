@@ -309,7 +309,11 @@ async function carregarArquivo(arquivo) {
     estado.arquivoAtual = null;
 
     // número de cada linha + cópia do RC original (para ligar/desligar a correção Infoprice)
-    await estado.conn.query('CREATE OR REPLACE TABLE fato AS SELECT row_number() OVER () AS rid, * FROM fato');
+    // + colunas das ELs (SKUs virtuais) e do MAT+1 (meses 13–24 das ELs)
+    const colsMatp = ['rcd', 'und', 'dos', 'rc', 'pf'].map((m) => `CAST(NULL AS DOUBLE) AS ${m}_MATP`);
+    const colsMesP = Array.from({ length: 12 }, (_, j) => ['rcd', 'und', 'rc', 'pf'].map((m) => `CAST(NULL AS DOUBLE) AS ${m}_p${j}`)).flat();
+    await estado.conn.query(`CREATE OR REPLACE TABLE fato AS SELECT row_number() OVER () AS rid, *,
+      FALSE AS is_el, FALSE AS el_sempre, CAST(NULL AS VARCHAR) AS el_id, ${[...colsMatp, ...colsMesP].join(', ')} FROM fato`);
     estado.colunasRc = [...Object.keys(periodos).map((p) => `rc_${p}`), ...meses.map((_, i) => `rc_m${i}`)];
     await estado.conn.query(`CREATE OR REPLACE TABLE rc_orig AS SELECT rid, ${estado.colunasRc.join(', ')} FROM fato`);
     estado.periodosRc = Object.keys(periodos);
@@ -326,7 +330,10 @@ async function carregarArquivo(arquivo) {
     prepararInterface();
     // arquivos Infoprice já carregados valem também para a nova base
     if (estado.ip.arquivos.length) await reprocessarInfoprice();
+    estado.cacheValoresEL = {};
+    await reconstruirEL();
     await atualizarTudo();
+    window.dispatchEvent(new Event('base-carregada'));
     mostrarProgresso('Pronto!', 1);
     $('tela-inicial').hidden = true;
     $('app').hidden = false;
@@ -356,7 +363,10 @@ function clausulaWhere(excetoKey) {
     const lista = [...f.valores].map(sqlTexto).join(', ');
     partes.push(`d_${d.key} ${f.modo === 'inc' ? 'IN' : 'NOT IN'} (${lista})`);
   }
-  return partes.length ? 'WHERE ' + partes.join(' AND ') : '';
+  if (!partes.length) return '';
+  // ELs marcadas "Incluir sempre no mercado filtrado" passam por qualquer filtro
+  if (elLigado()) return `WHERE ((${partes.join(' AND ')}) OR (is_el AND el_sempre))`;
+  return 'WHERE ' + partes.join(' AND ');
 }
 
 function estaMarcado(f, v) {
@@ -530,6 +540,7 @@ async function atualizarTudo() {
     ? 'Filtros: ' + ativos.map((d) => d.rotulo).join(', ')
     : 'Sem filtros aplicados';
 
+  await calcularSugestaoProj();
   estado.analisePendente = true;
   estado.precoPendente = true;
   if (estado.pagina === 'analise') await atualizarAnalise();
@@ -766,6 +777,11 @@ async function atualizarKpis(T, where, alvo = 'kpis') {
     ['kpi-cont', '#Marcas', inteiro(k.marcas)],
     ['kpi-cont', '#SKUs', inteiro(k.skus)],
   ];
+  if (T === 'MAT' && elLigado()) {
+    const [p] = await consultar(`SELECT SUM(${exprMATP('rcd')}) r, SUM(${exprMATP('und')}) u FROM fato ${where}`);
+    cards.splice(3, 0, ['kpi-rcd kpi-proj', 'RCD MAT+1 (proj.)', `${abreviar(p.r)} <small>${percentual(evolucao(p.r, k.r0))}</small>`]);
+    cards.splice(7, 0, ['kpi-und kpi-proj', 'UND MAT+1 (proj.)', `${abreviar(p.u)} <small>${percentual(evolucao(p.u, k.u0))}</small>`]);
+  }
   $(alvo).innerHTML = cards.map(([cls, rotulo, valor]) =>
     `<div class="kpi ${cls}"><div class="kpi-rotulo">${rotulo}</div><div class="kpi-valor">${valor}</div></div>`).join('');
 }
@@ -776,24 +792,27 @@ let ultimoGrafico = null;
 // Colunas e rótulos do eixo X conforme o Tempo
 function periodosGrafico() {
   const tempo = $('sel-tempo').value;
+  const projetado = new Set();
   if (tempo === 'MES') {
-    return { mes: true, rotulos: estado.meses, colunas: estado.meses.map((_, i) => `m${i}`) };
+    const rotulos = [...estado.meses];
+    const colunas = estado.meses.map((_, i) => `m${i}`);
+    // MAT+1 mês a mês (marcados com *)
+    if (elLigado()) rotulosProjetados().forEach((r, j) => { projetado.add(rotulos.length); rotulos.push(r + '*'); colunas.push(`p${j}`); });
+    return { mes: true, rotulos, colunas, projetado, atual: estado.meses.length - 1 };
   }
-  return {
-    mes: false,
-    rotulos: [`${tempo}-4`, `${tempo}-3`, `${tempo}-2`, `${tempo}-1`, tempo],
-    colunas: [4, 3, 2, 1, 0].map((k) => `${tempo}${k}`),
-  };
+  const rotulos = [`${tempo}-4`, `${tempo}-3`, `${tempo}-2`, `${tempo}-1`, tempo];
+  const colunas = [4, 3, 2, 1, 0].map((k) => `${tempo}${k}`);
+  if (elLigado() && tempo === 'MAT') { projetado.add(5); rotulos.push('MAT+1'); colunas.push('MATP'); }
+  return { mes: false, rotulos, colunas, projetado, atual: 4 };
 }
 
 async function atualizarGraficos() {
   const dims = estado.dimsGrafico;
   const per = periodosGrafico();
   const grupo = dims.length ? `concat_ws(' | ', ${dims.map(exprDim).join(', ')})` : `'Total'`;
-  const somas = per.colunas.map((c, i) => `SUM(rcd_${c}) r_${i}, SUM(und_${c}) u_${i}`).join(', ');
-  const linhas = await consultar(`SELECT ${grupo} AS g, ${somas} FROM fato ${whereAnalise()} GROUP BY 1`);
-  const ultimo = per.colunas.length - 1;
-  for (const l of linhas) l.r0 = l['r_' + ultimo]; // ranking pelo RCD do período mais recente
+  const somas = per.colunas.map((c, i) => `SUM(${colExpr('rcd', c)}) r_${i}, SUM(${colExpr('und', c)}) u_${i}`).join(', ');
+  const linhas = await consultar(`SELECT ${grupo} AS g, ${somas}, bool_or(is_el) AS el FROM fato ${whereAnalise()} GROUP BY 1`);
+  for (const l of linhas) l.r0 = l['r_' + per.atual]; // ranking pelo RCD do período atual (não o projetado)
   ultimoGrafico = { linhas, per };
   desenharGraficos();
 }
@@ -836,6 +855,7 @@ function desenharGraficos() {
   desenharGrafico('grafico-rcd', grupos, 'r_', per, totalGeral, tipo);
   desenharGrafico('grafico-und', grupos, 'u_', per, totalGeral, tipo);
   desenharLegenda(grupos);
+  if (per.projetado.size) nota += (nota ? ' ' : '') + (per.mes ? '* meses projetados (MAT+1).' : 'MAT+1 = projetado (hachurado).');
   $('nota-grafico').textContent = nota;
 }
 
@@ -844,7 +864,7 @@ function desenharLegenda(grupos, estatica = false) {
   $('legenda')._estatica = estatica;
   $('legenda').innerHTML = grupos.map((g, i) =>
     `<div class="leg-item${estatica ? ' estatica' : ''}${!estatica && estado.ocultas.has(g.nome) ? ' oculta' : ''}" data-i="${i}" title="${escaparHtml(g.nome)}">
-      <span class="leg-cor" style="background:${g.cor}"></span><span class="leg-nome">${escaparHtml(g.nome)}</span>
+      <span class="leg-cor" style="background:${g.cor}"></span><span class="leg-nome">${escaparHtml(g.nome)}</span>${g.linha && g.linha.el ? '<span class="tag-el">EL</span>' : ''}
     </div>`).join('');
   $('legenda')._grupos = grupos;
 }
@@ -858,7 +878,7 @@ function alternarSerie(nome) {
 }
 
 // ----- Waterfall ("Movimentações do Mercado") -----
-const WF = { total: '#6B76A6', aumento: '#3BAA4A', queda: '#D9534F', outros: '#F2C94C' };
+const WF = { total: '#6B76A6', aumento: '#3BAA4A', queda: '#D9534F', outros: '#F2C94C', projetado: '#AEB4D2' };
 
 // Totais de cada período e, entre eles, a variação dos N itens que mais mudaram.
 // Truque clássico: uma barra invisível de "base" empilhada sob a barra visível.
@@ -868,13 +888,14 @@ function desenharWaterfall(id, linhas, prefixo, per, n) {
   const grafico = estado.graficos[id];
   const ultimo = per.colunas.length - 1;
   // no modo Mês usa só o primeiro e o último mês
-  const indices = per.mes ? [0, ultimo] : per.colunas.map((_, i) => i);
+  const indices = per.mes ? [0, per.atual] : per.colunas.map((_, i) => i);
   const total = (i) => linhas.reduce((s, l) => s + (l[prefixo + i] || 0), 0);
 
   const barras = []; // { nome, base, altura, valor, cor, info }
   indices.forEach((i, k) => {
     const t = total(i);
-    barras.push({ nome: per.rotulos[i], base: 0, altura: t, valor: t, cor: WF.total, info: 'Total' });
+    const proj = per.projetado.has(i);
+    barras.push({ nome: per.rotulos[i], base: 0, altura: t, valor: t, cor: proj ? WF.projetado : WF.total, info: proj ? 'Total projetado' : 'Total' });
     if (k === indices.length - 1) return;
     const j = indices[k + 1];
     const transicao = `${per.rotulos[i]} → ${per.rotulos[j]}`;
@@ -894,7 +915,7 @@ function desenharWaterfall(id, linhas, prefixo, per, n) {
 
   const curto = (s) => (s.length > 16 ? s.slice(0, 15) + '…' : s);
   // o eixo começa um pouco abaixo do menor nível, para as variações ficarem visíveis
-  const menorNivel = Math.min(...barras.map((b) => (b.info === 'Total' ? b.valor : b.base)));
+  const menorNivel = Math.min(...barras.map((b) => (b.info.startsWith('Total') ? b.valor : b.base)));
   let minimo = 0;
   if (menorNivel > 0) {
     const passo = Math.pow(10, Math.floor(Math.log10(menorNivel * 0.85)) - 1);
@@ -1011,6 +1032,14 @@ function desenharGrafico(id, grupos, prefixo, per, totalGeral, tipo) {
     return serie;
   });
 
+  // períodos projetados (MAT+1): mais claros e hachurados
+  if (per.projetado.size) {
+    for (const s of series) {
+      s.data = s.data.map((d, i) => (per.projetado.has(i)
+        ? { ...d, itemStyle: { opacity: 0.55, decal: HACHURA }, symbol: 'emptyCircle' } : d));
+    }
+  }
+
   // total escrito acima das barras/áreas empilhadas (série invisível)
   if (empilhado) {
     const chaveTotal = pontosChave(totais);
@@ -1054,7 +1083,7 @@ function desenharGrafico(id, grupos, prefixo, per, totalGeral, tipo) {
     labelLayout: mes ? { hideOverlap: true } : undefined,
     xAxis: {
       type: 'category', data: per.rotulos, boundaryGap: ehBarra || n === 1,
-      axisLabel: { rotate: mes ? 90 : 0, fontSize: mes ? 9 : 12 },
+      axisLabel: { rotate: mes ? 90 : 0, fontSize: mes ? 9 : 12, formatter: (v) => (v === 'MAT+1' ? 'MAT+1\n(projetado)' : v) },
     },
     yAxis: cem
       ? { type: 'value', max: 100, axisLabel: { formatter: (v) => v + '%' } }
@@ -1065,19 +1094,27 @@ function desenharGrafico(id, grupos, prefixo, per, totalGeral, tipo) {
 }
 
 // ----- Tabela (matriz com níveis) -----
-const CAMPOS_TABELA = ['r0', 'r1', 'r4', 'u0', 'u1', 'u4', 'd0'];
+const CAMPOS_TABELA = ['r0', 'r1', 'r4', 'u0', 'u1', 'u4', 'd0', 'rP', 'uP'];
 const SEP = '\u0001'; // separador interno do "caminho" de cada linha
 
-const COLUNAS_TABELA = (T) => [
+const COLUNAS_TABELA = (T, comProjecao = false) => [
   { id: 'r0', titulo: `RCD ${T}`, tipo: 'num', cor: '#6B76A6' },
   { id: 'msR', titulo: 'MS% RCD', tipo: 'pct', cor: '#F2C94C' },
   { id: 'evR', titulo: `Evol. ${T} RCD`, tipo: 'var' },
   { id: 'cgR', titulo: 'CAGR 5Y RCD', tipo: 'var' },
+  ...(comProjecao ? [
+    { id: 'rP', titulo: 'RCD MAT+1', tipo: 'num', cor: '#AEB4D2', proj: true },
+    { id: 'evRP', titulo: 'Evol. MAT+1 RCD', tipo: 'var', proj: true },
+  ] : []),
   { id: 'u0', titulo: `UND ${T}`, tipo: 'num', cor: '#A58BDB' },
   { id: 'msU', titulo: 'MS% UND', tipo: 'pct', cor: '#F2C94C' },
   { id: 'msD', titulo: 'MS% DOSES', tipo: 'pct', cor: '#F2C94C' },
   { id: 'evU', titulo: `Evol. ${T} UND`, tipo: 'var' },
   { id: 'cgU', titulo: 'CAGR 5Y UND', tipo: 'var' },
+  ...(comProjecao ? [
+    { id: 'uP', titulo: 'UND MAT+1', tipo: 'num', cor: '#CDBDEB', proj: true },
+    { id: 'evUP', titulo: 'Evol. MAT+1 UND', tipo: 'var', proj: true },
+  ] : []),
 ];
 
 function novoNo(nome, nivel, caminho, valores) {
@@ -1095,6 +1132,8 @@ function completarNo(no, total) {
   no.cgR = cagr(no.r0, no.r4);
   no.evU = evolucao(no.u0, no.u1);
   no.cgU = cagr(no.u0, no.u4);
+  no.evRP = evolucao(no.rP, no.r0);
+  no.evUP = evolucao(no.uP, no.u0);
 }
 
 // A tabela usa só os filtros da página Filtros (não a própria seleção)
@@ -1106,7 +1145,9 @@ async function atualizarTabela() {
   const linhas = await consultar(`SELECT ${grupos.length ? grupos.join(', ') + ',' : ''}
       SUM(rcd_${T}0) r0, SUM(rcd_${T}1) r1, SUM(rcd_${T}4) r4,
       SUM(und_${T}0) u0, SUM(und_${T}1) u1, SUM(und_${T}4) u4,
-      SUM(dos_${T}0) d0
+      SUM(dos_${T}0) d0,
+      ${T === 'MAT' && elLigado() ? `SUM(${exprMATP('rcd')}) rP, SUM(${exprMATP('und')}) uP,` : ''}
+      bool_or(is_el) AS el
     FROM fato ${clausulaWhere(null)} ${grupos.length ? 'GROUP BY ALL' : ''}`);
 
   // monta a árvore: cada nível soma os valores dos níveis abaixo
@@ -1122,12 +1163,13 @@ async function atualizarTabela() {
         no.filhos.set(valor, filho);
       }
       somarCampos(filho, l, CAMPOS_TABELA);
+      if (l.el) filho.el = true; // a linha tem SKU de EL
       no = filho;
     });
   }
   const completarTudo = (no) => { completarNo(no, raiz); no.filhos.forEach(completarTudo); };
   completarTudo(raiz);
-  ultimaTabela = { raiz, T, dims: [...dims] };
+  ultimaTabela = { raiz, T, dims: [...dims], projecao: T === 'MAT' && elLigado() };
   desenharTabela();
 }
 
@@ -1173,7 +1215,7 @@ function linhaSelecionada(caminho) {
 function desenharTabela() {
   if (!ultimaTabela) return;
   const { raiz, T, dims } = ultimaTabela;
-  const colunas = COLUNAS_TABELA(T);
+  const colunas = COLUNAS_TABELA(T, ultimaTabela.projecao);
   const { col, desc } = estado.ordem;
   const ultimoNivel = dims.length - 1;
 
@@ -1233,7 +1275,7 @@ function desenharTabela() {
     if (l.ehOutros) classes.push('linha-outros');
     if (haSelecao) classes.push(estado.selecao.has(l.caminho) ? 'selecionada' : linhaSelecionada(l.caminho) ? '' : 'apagada');
     return `<tr class="${classes.join(' ')}" data-i="${i}">
-      <td style="padding-left:${8 + l.nivel * 20}px">${botao}${escaparHtml(l.nome)}</td>
+      <td style="padding-left:${8 + l.nivel * 20}px">${botao}${escaparHtml(l.nome)}${l.el ? '<span class="tag-el">EL</span>' : ''}</td>
       ${colunas.map((c) => celula(l, c, true)).join('')}</tr>`;
   }).join('') + '</tbody>';
   const rodape = `<tfoot><tr><td>Total</td>${colunas.map((c) => celula(raiz, c, false)).join('')}</tr></tfoot>`;
@@ -1854,7 +1896,8 @@ async function atualizarPreco2() {
   // MAT-4 … MAT por apresentação
   const somasMat = [0, 1, 2, 3, 4].map((k) =>
     `SUM(rcd_MAT${k}) r${k}, SUM(und_MAT${k}) u${k}, SUM(rc_MAT${k}) c${k}, SUM(pf_MAT${k}) p${k}`).join(', ');
-  const porApres = await consultar(`SELECT d_apres AS apres, ${somasMat} FROM fato ${whereSel} GROUP BY 1`);
+  const somaProj = elLigado() ? `, SUM(${exprMATP('rcd')}) rP, SUM(${exprMATP('und')}) uP, SUM(${exprMATP('rc')}) cP, SUM(${exprMATP('pf')}) pP` : '';
+  const porApres = await consultar(`SELECT d_apres AS apres, ${somasMat}${somaProj} FROM fato ${whereSel} GROUP BY 1`);
   porApres.sort((a, b) => todas.indexOf(a.apres) - todas.indexOf(b.apres));
 
   estado.p2.dados = { mensal, porApres, cores, apresUsadas: s.apres.valores.size ? [...s.apres.valores] : todas };
@@ -1958,6 +2001,7 @@ function desenharMensalP2(mensal) {
 function desenharMatsP2(porApres, cores) {
   const rotulos = ['MAT-4', 'MAT-3', 'MAT-2', 'MAT-1', 'MAT'];
   const ks = [4, 3, 2, 1, 0];
+  if (elLigado() && porApres.some((a) => 'rP' in a)) { rotulos.push('MAT+1*'); ks.push('P'); }
   const calc = {
     'p2-pf': (a, k) => precoMedio(a['p' + k], a['u' + k]),
     'p2-rcd': (a, k) => precoMedio(a['r' + k], a['u' + k]),
@@ -2397,7 +2441,7 @@ function precosMensais(porColuna) {
 async function carregarCandidatos() {
   const linhas = await consultar(`SELECT d_apres AS apres, any_value(d_produto) AS produto, any_value(d_molecula) AS molecula,
       any_value(d_conc) AS conc, any_value(qtdnum) AS qtdnum, any_value(d_lab) AS lab, any_value(d_corp) AS corp
-    FROM fato GROUP BY 1`);
+    FROM fato WHERE NOT is_el GROUP BY 1`);
   estado.ip.candidatos = linhas.map((c) => {
     const conc = lerConcentracao(c.conc);
     return {
@@ -2662,4 +2706,169 @@ $('ip-importar').addEventListener('change', async (e) => {
   const a = e.target.files && e.target.files[0];
   e.target.value = '';
   if (a) await importarDepara(a);
+});
+
+// =====================================================================
+// Integração com as ELs (Estudos de Lançamento) e projeção MAT+1
+// As ELs vêm do el.js (window.estudosEL); aqui viram SKUs virtuais na base.
+// =====================================================================
+const CHAVE_CHAVE_EL = 'dashboard-farma:incluir-els';
+const HACHURA = { symbol: 'rect', dashArrayX: [1, 0], dashArrayY: [3, 4], rotation: -Math.PI / 4, color: 'rgba(255,255,255,0.6)' };
+const elLigado = () => !!estado.elAtivo;
+try { estado.elAtivo = localStorage.getItem(CHAVE_CHAVE_EL) === '1'; } catch { estado.elAtivo = false; }
+estado.sugestaoProj = { und: null, rs: null };
+
+// evolução usada no MAT+1 (fração): a digitada na aba EL ou, se vazia, a sugerida
+function evolucaoProj() {
+  const p = (window.estudosEL && window.estudosEL.projecao()) || {};
+  const pega = (digitado, sugerido) => (valido(digitado) ? digitado / 100 : valido(sugerido) ? sugerido : 0);
+  return { und: pega(p.und, estado.sugestaoProj.und), rs: pega(p.rs, estado.sugestaoProj.rs) };
+}
+// MAT+1: SKUs da EL têm valor próprio; SKUs reais = MAT-0 × (1 + evolução)
+function exprMATP(med) {
+  const e = evolucaoProj();
+  const f = 1 + (med === 'und' || med === 'dos' ? e.und : e.rs);
+  return `COALESCE(${med}_MATP, ${med}_MAT0 * ${f})`;
+}
+// mês j do MAT+1: segue a sazonalidade do mesmo mês do MAT-0
+function exprMesP(med, j) {
+  const e = evolucaoProj();
+  const f = 1 + (med === 'und' ? e.und : e.rs);
+  const janela = indicesJanela('MAT', 0);
+  const base = janela[j];
+  return base === undefined ? `${med}_p${j}` : `COALESCE(${med}_p${j}, ${med}_m${base} * ${f})`;
+}
+function colExpr(med, c) {
+  if (c === 'MATP') return exprMATP(med);
+  const m = /^p(\d+)$/.exec(c);
+  if (m) return exprMesP(med, Number(m[1]));
+  return `${med}_${c}`;
+}
+// rótulos dos 12 meses seguintes ao último mês da base (ex.: set-26 … ago-27)
+function rotulosProjetados() {
+  const meses = estado.mesesObj || [];
+  if (!meses.length) return [];
+  const u = meses[meses.length - 1];
+  return Array.from({ length: 12 }, (_, j) => {
+    const idx = u.ano * 12 + u.mes - 1 + j + 1;
+    return `${NOME_MES[idx % 12]}-${String(Math.floor(idx / 12)).slice(2)}`;
+  });
+}
+
+// --------- SKUs virtuais das ELs ---------
+const sqlNum = (v) => (valido(v) ? String(v) : 'NULL');
+const vazioSe = (v) => (v === undefined || v === null || String(v).trim() === '' ? '(vazio)' : String(v).trim());
+function apresentacaoEL(el) {
+  const c = el.classif || {};
+  return `${(c.produto || el.info.produto || 'EL').trim()} ${(el.info.padraoSku || '').trim()} (EL)`.replace(/\s+/g, ' ');
+}
+
+async function reconstruirEL() {
+  if (!estado.conn) return;
+  await estado.conn.query('DELETE FROM fato WHERE is_el');
+  const lista = (window.estudosEL && window.estudosEL.lista()) || [];
+  if (!elLigado() || !lista.length || !(estado.mesesObj || []).length) return;
+  const janela = indicesJanela('MAT', 0);   // Mês 1..12 da EL = meses do MAT atual
+  const ytd = new Set(indicesJanela('YTD', 0));
+  const medidas = [['und', 'un'], ['pf', 'pf'], ['rcd', 'ppp'], ['rc', 'cpp']]; // coluna da base <- coluna da Demanda (k)
+  const colunas = ['rid', ...DIMENSOES.map((d) => `d_${d.key}`), 'sigla', 'sku', 'qtdnum', 'is_el', 'el_sempre', 'el_id'];
+  const medCols = [];
+  for (const [m] of medidas) {
+    for (const i of janela) medCols.push(`${m}_m${i}`);
+    medCols.push(`${m}_MAT0`, `${m}_YTD0`, `${m}_MATP`);
+    for (let j = 0; j < 12; j++) medCols.push(`${m}_p${j}`);
+  }
+  medCols.push('dos_MAT0', 'dos_YTD0', 'dos_MATP');
+  const linhas = lista.map((el, n) => {
+    const c = el.classif || {};
+    const dims = DIMENSOES.map((d) => sqlTexto(d.key === 'apres' ? apresentacaoEL(el) : vazioSe(c[d.key])));
+    const qtdnum = valido(c.qtdnum) ? c.qtdnum : null;
+    const valores = [];
+    const tot = {};
+    for (const [m, campoEL] of medidas) {
+      const mes = (k) => { const v = el.dem && el.dem.m[k] ? el.dem.m[k][campoEL] : null; return valido(v) ? v * 1000 : null; };
+      let mat = 0, ano = 0, prox = 0;
+      janela.forEach((i, k) => { const v = mes(k); valores.push(sqlNum(v)); mat += v || 0; if (ytd.has(i)) ano += v || 0; });
+      for (let k = 12; k < 24; k++) prox += mes(k) || 0;
+      valores.push(String(mat), String(ano), String(prox));
+      for (let j = 0; j < 12; j++) valores.push(String(mes(12 + j) || 0));
+      tot[m] = { mat, ano, prox };
+    }
+    const dos = (v) => (qtdnum !== null ? String(v * qtdnum) : 'NULL');
+    valores.push(dos(tot.und.mat), dos(tot.und.ano), dos(tot.und.prox));
+    const sempre = el.sempre !== false;
+    return `(${[1e9 + n, ...dims, sqlTexto(vazioSe(c.sigla)), sqlTexto('EL:' + el.id), sqlNum(qtdnum), 'TRUE', sempre ? 'TRUE' : 'FALSE', sqlTexto(el.id), ...valores].join(', ')})`;
+  });
+  await estado.conn.query(`INSERT INTO fato (${[...colunas, ...medCols].join(', ')}) VALUES ${linhas.join(', ')}`);
+}
+
+// evolução MAT-0 vs MAT-1 do mercado filtrado (só SKUs reais), sugerida para o MAT+1
+async function calcularSugestaoProj() {
+  if (!estado.conn) return;
+  const where = clausulaWhere(null);
+  const [s] = await consultar(`SELECT SUM(und_MAT0) u0, SUM(und_MAT1) u1, SUM(rcd_MAT0) r0, SUM(rcd_MAT1) r1
+    FROM fato ${where ? where + ' AND NOT is_el' : 'WHERE NOT is_el'}`);
+  estado.sugestaoProj = { und: evolucao(s.u0, s.u1), rs: evolucao(s.r0, s.r1) };
+  window.dispatchEvent(new Event('sugestao-proj'));
+}
+
+// tudo que mostra dados recalcula
+async function aposMudancaEL(reconstruir) {
+  if (!estado.conn) return;
+  if (reconstruir) await reconstruirEL();
+  estado.analisePendente = estado.precoPendente = estado.preco2Pendente = estado.preco3Pendente = true;
+  await atualizarTudo();
+}
+
+// API para a aba EL (el.js)
+window.painelEL = {
+  baseCarregada: () => !!estado.conn,
+  // valores existentes na base para cada campo da classificação
+  async valores(chave) {
+    if (!estado.conn) return [];
+    estado.cacheValoresEL = estado.cacheValoresEL || {};
+    if (estado.cacheValoresEL[chave]) return estado.cacheValoresEL[chave];
+    const expr = chave === 'sigla' ? 'sigla' : chave === 'qtdnum' ? 'qtdnum' : `d_${chave}`;
+    const linhas = await consultar(`SELECT DISTINCT ${expr} AS v FROM fato WHERE NOT is_el AND ${expr} IS NOT NULL ORDER BY 1`);
+    const lista = linhas.map((l) => (chave === 'qtdnum' ? fmt0.format(l.v) : l.v)).filter((v) => v !== '(vazio)' && v !== '(não informado)');
+    estado.cacheValoresEL[chave] = lista;
+    return lista;
+  },
+  // classificação mais comum de um produto que já existe na base
+  async classificacaoDoProduto(produto) {
+    if (!estado.conn || !produto) return null;
+    const cols = DIMENSOES.map((d) => `mode(d_${d.key}) AS ${d.key}`).join(', ');
+    const [l] = await consultar(`SELECT count(*) AS n, ${cols}, mode(sigla) AS sigla FROM fato
+      WHERE NOT is_el AND lower(d_produto) = lower(${sqlTexto(produto)})`);
+    return l && l.n ? l : null;
+  },
+  sugestao: () => estado.sugestaoProj,
+  periodo: () => {
+    const j = indicesJanela('MAT', 0);
+    const proj = rotulosProjetados();
+    return j.length ? { ini: estado.meses[j[0]], fim: estado.meses[j[j.length - 1]], projIni: proj[0], projFim: proj[11] } : null;
+  },
+  ligado: elLigado,
+};
+
+// interruptor global "Incluir ELs e MAT+1"
+$('chave-el').checked = elLigado();
+$('chave-el').addEventListener('change', async (e) => {
+  estado.elAtivo = e.target.checked;
+  try { localStorage.setItem(CHAVE_CHAVE_EL, estado.elAtivo ? '1' : '0'); } catch { /* sem armazenamento */ }
+  document.body.classList.toggle('com-el', estado.elAtivo);
+  await aposMudancaEL(true);
+  window.dispatchEvent(new Event('chave-el'));
+});
+document.body.classList.toggle('com-el', elLigado());
+
+// edições na aba EL: reconstrói os SKUs virtuais (com uma pequena espera enquanto digita)
+let esperaEL = null;
+window.addEventListener('els-alteradas', () => {
+  clearTimeout(esperaEL);
+  esperaEL = setTimeout(() => aposMudancaEL(true), 400);
+});
+window.addEventListener('projecao-alterada', () => {
+  clearTimeout(esperaEL);
+  esperaEL = setTimeout(() => aposMudancaEL(false), 300);
 });

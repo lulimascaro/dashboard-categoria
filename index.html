@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dashboard de Mercado Farmacêutico</title>
   <!-- Ao publicar uma nova versão, atualize o número "?v=" nas duas linhas abaixo -->
-  <link rel="stylesheet" href="style.css?v=20261027-10">
+  <link rel="stylesheet" href="style.css?v=20261027-11">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
-  <script type="module" src="app.js?v=20261027-10"></script>
-  <script type="module" src="el.js?v=20261027-10"></script>
+  <script type="module" src="app.js?v=20261027-11"></script>
+  <script type="module" src="el.js?v=20261027-11"></script>
 </head>
 <body>
 
@@ -57,6 +57,9 @@
         <button class="aba" data-pagina="preco3">Preço 3</button>
         <button class="aba" data-pagina="el" title="Estudo de Lançamento">EL</button>
       </nav>
+      <label class="chave-el" title="Inclui os SKUs das ELs e o período projetado MAT+1 em todas as páginas">
+        <input type="checkbox" id="chave-el"> Incluir ELs e MAT+1
+      </label>
       <button class="botao-link" id="btn-trocar">Trocar arquivo</button>
     </header>
 
@@ -313,6 +316,18 @@
         <span class="el-aviso">🔒 As ELs ficam salvas só neste navegador. Exporte para não perder.</span>
         <span id="el-aviso-salvar" class="el-erro"></span>
       </div>
+      <div class="el-proj">
+        <b>Projeção MAT+1</b>
+        <label>Evolução UND (%) <input type="text" id="el-proj-und" inputmode="decimal"></label>
+        <span class="el-proj-sugtxt" id="el-proj-und-sug"></span>
+        <button type="button" class="botao-pequeno" id="el-proj-und-voltar">Voltar ao sugerido</button>
+        <label>Evolução R$ (%) <input type="text" id="el-proj-rs" inputmode="decimal"></label>
+        <span class="el-proj-sugtxt" id="el-proj-rs-sug"></span>
+        <button type="button" class="botao-pequeno" id="el-proj-rs-voltar">Voltar ao sugerido</button>
+        <span class="el-proj-periodo" id="el-proj-periodo"></span>
+        <span class="el-proj-desligado" id="el-proj-desligado">Para ver as ELs e o MAT+1 nas outras páginas, ligue <b>"Incluir ELs e MAT+1"</b> no topo.</span>
+      </div>
+      <div id="el-listas" hidden></div>
       <div id="el-subabas" class="el-subabas"></div>
       <div id="el-resumo" class="el-resumo" hidden></div>
       <div id="el-vazio" class="el-vazio">

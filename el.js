@@ -215,6 +215,7 @@ function carregarSalvas() {
   if (!els.lista.some((e) => e.id === els.ativa)) els.ativa = els.lista[0] ? els.lista[0].id : null;
 }
 function salvar() {
+  window.dispatchEvent(new Event('els-alteradas')); // o dashboard refaz os SKUs das ELs
   try {
     localStorage.setItem(CHAVE_ELS, JSON.stringify({ lista: els.lista, ativa: els.ativa }));
     $('el-aviso-salvar').textContent = '';
@@ -364,7 +365,7 @@ function htmlEL(el) {
       <h1 class="el-titulo">Investimento</h1>
       <div class="el-caixas">${tabelaAnos('Investimento Comercial (R$)', 'inv.com', 2, true)}${tabelaAnos('Investimento MKT (R$)', 'inv.mkt', 2, true)}</div>
     </section>`;
-  return cab + info + prec + volume + exec;
+  return cab + info + htmlClassificacao(el) + prec + volume + exec;
 }
 
 function recalcular() {
@@ -407,9 +408,14 @@ function aoEditar(e) {
   let valor;
   if (alvo.classList.contains('el-num')) valor = lerNumero(alvo.value);
   else if (alvo.classList.contains('el-bool')) valor = alvo.value === '' ? null : alvo.value === 'true';
+  else if (alvo.type === 'checkbox') valor = alvo.checked;
   else valor = alvo.value;
   gravar(el, alvo.dataset.c, valor);
   if (alvo.classList.contains('el-area')) ajustarAltura(alvo);
+  if (alvo.dataset.c.startsWith('classif.') || alvo.dataset.c === 'info.padraoSku') {
+    const ap = document.querySelector('#el-folha .el-apres-el');
+    if (ap) ap.textContent = apresentacaoEL(el);
+  }
   recalcular();
   if (alvo.dataset.c === 'info.produto' || alvo.dataset.c === 'info.padraoSku') {
     const nome = document.querySelector(`.el-subaba[data-id="${el.id}"] .el-subaba-nome`);
@@ -747,6 +753,7 @@ async function importarArquivosHtml(arquivos) {
     try {
       const { el, faltando, diferencas, lidos } = importarHtmlEL(await arquivo.text());
       if (lidos < 10) throw new Error('não parece um arquivo de EL (quase nenhum campo foi reconhecido)');
+      await sugerirClassificacao(el); // classificação na base sugerida a partir da EL
       els.lista.push(el);
       els.ativa = el.id;
       const listaFalt = faltando.length
@@ -806,4 +813,169 @@ function iniciar() {
   });
 }
 
+
+// =====================================================================
+// Ligação com o restante do dashboard
+// =====================================================================
+const CHAVE_PROJ = 'dashboard-farma:projecao-mat1';
+const CLASSIF = [
+  ['corp', 'Corporação'], ['lab', 'Laboratório'], ['sigla', 'Sigla Laboratorio'], ['bu', 'DIVISAO (BU)'],
+  ['produto', 'Produto'], ['molecula', 'Molécula'], ['mercado', 'Mercado'],
+  ['ct1', 'Classe Terapêutica Nível 1'], ['ct2', 'Classe Terapêutica Nível 2'],
+  ['ct3', 'Classe Terapêutica Nível 3'], ['ct4', 'Classe Terapêutica Nível 4'],
+  ['tipoforma', 'Tipo_forma_aplicacao'], ['forma', 'Forma_aplicacao'], ['conc', 'Concentração'],
+  ['qtd', 'Quantidade'], ['qtdnum', 'Quantidade Num', 'num'], ['padrao', 'Padrão SKU (base)'],
+  ['cat1', 'CLASSIF. GERAL N1'], ['cat2', 'CLASSIF. GERAL N2'], ['cat3', 'CLASSIF. GERAL N3'],
+  ['cat4', 'CLASSIF. GERAL N4'], ['cat5', 'CLASSIF. GERAL N5'],
+];
+let projecao = { und: null, rs: null }; // null = usa o sugerido
+try { projecao = { ...projecao, ...(JSON.parse(localStorage.getItem(CHAVE_PROJ) || '{}') || {}) }; } catch { /* sem armazenamento */ }
+
+// o dashboard lê as ELs e a projeção por aqui
+window.estudosEL = {
+  lista: () => els.lista,
+  projecao: () => ({ ...projecao }),
+};
+
+function apresentacaoEL(el) {
+  const c = el.classif || {};
+  return `${(c.produto || el.info.produto || 'EL').trim()} ${(el.info.padraoSku || '').trim()} (EL)`.replace(/\s+/g, ' ');
+}
+
+function htmlClassificacao(el) {
+  el.classif = el.classif || {};
+  const sempre = el.sempre !== false;
+  const linhas = CLASSIF.map(([k, r, tipo]) => `
+    <label class="el-cl-campo"><span>${r}</span>
+      ${tipo === 'num'
+        ? `<input class="el-in el-num el-esq" data-c="classif.${k}" data-d="0" inputmode="decimal" value="${esc(fmtNum(el.classif[k], 0))}" list="el-dl-${k}">`
+        : `<input class="el-in el-txt el-esq" data-c="classif.${k}" value="${esc(el.classif[k] || '')}" list="el-dl-${k}" placeholder="digite ou escolha">`}
+    </label>`).join('');
+  return `
+    <section class="el-classif">
+      <h2 class="el-cl-titulo">Classificação no mercado (base RM)</h2>
+      <p class="el-cl-dica">Como este SKU entra nos filtros e gráficos do dashboard. As listas trazem os valores da base; também dá para digitar um valor novo.</p>
+      <div class="el-cl-topo">
+        <label class="el-cl-sempre"><input type="checkbox" class="el-in" data-c="sempre" ${sempre ? 'checked' : ''}> Incluir sempre no mercado filtrado</label>
+        <span>Apresentação na base: <b class="el-apres-el">${esc(apresentacaoEL(el))}</b></span>
+        <button type="button" class="botao-pequeno el-sugerir">Sugerir a partir da EL</button>
+      </div>
+      <div class="el-cl-grade">${linhas}</div>
+    </section>`;
+}
+
+// listas de valores da base para as caixas de classificação
+async function montarListas() {
+  const painel = window.painelEL;
+  if (!painel || !painel.baseCarregada()) return;
+  let html = '';
+  for (const [k] of CLASSIF) {
+    const valores = await painel.valores(k);
+    html += `<datalist id="el-dl-${k}">${valores.map((v) => `<option value="${esc(v)}"></option>`).join('')}</datalist>`;
+  }
+  $('el-listas').innerHTML = html;
+}
+
+// sugestões a partir dos campos da EL (só preenche o que está vazio)
+async function sugerirClassificacao(el) {
+  const painel = window.painelEL;
+  if (!painel || !painel.baseCarregada()) return false;
+  el.classif = el.classif || {};
+  const c = el.classif;
+  const vazio = (k) => c[k] === undefined || c[k] === null || String(c[k]).trim() === '';
+  const achar = async (k, texto) => {
+    if (!texto) return null;
+    const alvo = chaveTexto(texto);
+    return (await painel.valores(k)).find((v) => chaveTexto(v) === alvo) || null;
+  };
+  const mudou = [];
+  const por = (k, v) => { if (vazio(k) && v !== null && v !== undefined && String(v).trim() !== '') { c[k] = v; mudou.push(k); } };
+  // produto e molécula
+  por('produto', (await achar('produto', el.info.produto)) || el.info.produto);
+  por('molecula', (await achar('molecula', el.info.molecula)) || el.info.molecula);
+  // produto que já existe na base: herda a classificação mais comum dele
+  const tipico = await painel.classificacaoDoProduto(c.produto);
+  if (tipico) for (const k of ['corp', 'lab', 'sigla', 'bu', 'mercado', 'ct1', 'ct2', 'ct3', 'ct4', 'tipoforma', 'cat1', 'cat2', 'cat3', 'cat4', 'cat5']) {
+    if (tipico[k] && tipico[k] !== '(vazio)') por(k, tipico[k]);
+  }
+  // classe terapêutica pelo código (ex.: "A09A0 - DIGESTIVOS" -> classes da base que começam com A09A…)
+  const codigo = String(el.info.classe || '').trim().split(/[\s-]+/)[0].toUpperCase();
+  if (codigo) {
+    const codigoDe = (v) => String(v).trim().split(/\s+/)[0].toUpperCase();
+    for (const nivel of [1, 2, 3, 4]) {
+      const k = `ct${nivel}`;
+      if (!vazio(k)) continue;
+      const lista = await painel.valores(k);
+      let melhor = null;
+      for (const v of lista) {
+        const cod = codigoDe(v);
+        if (cod && codigo.startsWith(cod) && (!melhor || cod.length > codigoDe(melhor).length)) melhor = v;
+      }
+      if (!melhor && nivel === 4) melhor = lista.find((v) => codigoDe(v).startsWith(codigo.slice(0, 4))) || null;
+      por(k, melhor);
+    }
+  }
+  // quantidade a partir do Padrão SKU (ex.: "X 20" -> 20)
+  const q = String(el.info.padraoSku || '').match(/(\d+(?:[.,]\d+)?)/);
+  if (q) {
+    const n = Number(q[1].replace(',', '.'));
+    if (vazio('qtdnum')) { c.qtdnum = n; mudou.push('qtdnum'); }
+    const opcoes = (await painel.valores('qtd')).filter((v) => parseFloat(String(v).replace(',', '.')) === n);
+    const forma = chaveTexto(el.info.forma);
+    const pref = opcoes.find((v) => (forma.includes('cpr') || forma.includes('comprim')) && chaveTexto(v).includes('comprim'))
+      || opcoes.find((v) => forma.includes('caps') && chaveTexto(v).includes('caps')) || opcoes[0];
+    por('qtd', pref || null);
+  }
+  el.classifSugerida = true;
+  return mudou.length > 0;
+}
+
+// ----- projeção MAT+1 -----
+function salvarProjecao() {
+  try { localStorage.setItem(CHAVE_PROJ, JSON.stringify(projecao)); } catch { /* sem armazenamento */ }
+  window.dispatchEvent(new Event('projecao-alterada'));
+}
+function desenharProjecao() {
+  const painel = window.painelEL;
+  const sug = painel ? painel.sugestao() : { und: null, rs: null };
+  const per = painel && painel.periodo ? painel.periodo() : null;
+  for (const [k, id] of [['und', 'el-proj-und'], ['rs', 'el-proj-rs']]) {
+    const caixa = $(id);
+    const sugerido = typeof sug[k] === 'number' ? sug[k] * 100 : null;
+    if (document.activeElement !== caixa) caixa.value = fmtNum(projecao[k] !== null && projecao[k] !== undefined ? projecao[k] : sugerido, 1);
+    caixa.classList.toggle('el-proj-sug', projecao[k] === null || projecao[k] === undefined);
+    $(id + '-sug').textContent = `sugerido: ${sugerido === null ? '-' : fmtNum(sugerido, 1) + '%'}`;
+  }
+  $('el-proj-periodo').textContent = per
+    ? `Meses 1–12 da EL = ${per.ini} a ${per.fim} (MAT atual) · Meses 13–24 = ${per.projIni} a ${per.projFim} (MAT+1)`
+    : 'Carregue a base para ver os meses do MAT atual.';
+  $('el-proj-desligado').hidden = !!(painel && painel.ligado());
+}
+
+function iniciarIntegracao() {
+  for (const [k, id] of [['und', 'el-proj-und'], ['rs', 'el-proj-rs']]) {
+    $(id).addEventListener('input', (e) => { projecao[k] = lerNumero(e.target.value); e.target.classList.remove('el-proj-sug'); salvarProjecao(); });
+    $(id).addEventListener('blur', desenharProjecao);
+    $(id + '-voltar').addEventListener('click', () => { projecao[k] = null; salvarProjecao(); desenharProjecao(); });
+  }
+  $('el-folha').addEventListener('click', async (e) => {
+    if (!e.target.closest('.el-sugerir')) return;
+    const el = elAtiva();
+    if (el && await sugerirClassificacao(el)) { salvar(); desenharEL(); }
+  });
+  window.addEventListener('sugestao-proj', desenharProjecao);
+  window.addEventListener('chave-el', desenharProjecao);
+  window.addEventListener('base-carregada', async () => {
+    await montarListas();
+    // ELs ainda não classificadas recebem a sugestão automática uma vez
+    let mudou = false;
+    for (const el of els.lista) if (!el.classifSugerida && await sugerirClassificacao(el)) mudou = true;
+    if (mudou) { salvar(); desenharEL(); }
+    desenharProjecao();
+  });
+  desenharProjecao();
+}
+
+// inicia só no fim do arquivo, quando todas as constantes acima já existem
 iniciar();
+iniciarIntegracao();

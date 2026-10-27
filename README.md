@@ -38,6 +38,11 @@ cálculos atualizados enquanto se digita. Um arquivo `.html` no formato do `exem
 importado (lido pelos rótulos das linhas e colunas). As ELs ficam **só no navegador**; use
 "Exportar ELs" (arquivo `.json`) como backup e "Importar ELs" para restaurar.
 
+Com o interruptor **"Incluir ELs e MAT+1"** (topo do dashboard) ligado, cada EL vira um SKU
+virtual na base: os meses 1–12 da EL entram no MAT atual e os meses 13–24 formam o período projetado
+**MAT+1** (os SKUs reais são projetados pela evolução definida no bloco "Projeção MAT+1" da aba EL).
+Desligado, o dashboard fica exatamente como sem as ELs.
+
 O `exemplo_el.html` é **fictício**, apenas para teste.
 
 ## Como publicar no GitHub Pages
