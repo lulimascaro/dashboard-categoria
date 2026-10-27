@@ -390,6 +390,7 @@ function prepararInterface() {
   renderizarSeletores();
   prepararPreco();
   prepararPreco2();
+  prepararPreco3();
 }
 
 function criarCardFiltro(d) {
@@ -488,6 +489,8 @@ async function atualizarTudo() {
   if (estado.pagina === 'preco') await atualizarPreco();
   estado.preco2Pendente = true;
   if (estado.pagina === 'preco2') await atualizarPreco2();
+  estado.preco3Pendente = true;
+  if (estado.pagina === 'preco3') await atualizarPreco3();
 }
 
 function zerarFiltros() {
@@ -654,6 +657,7 @@ function trocarPagina(pagina) {
   $('pagina-analise').hidden = pagina !== 'analise';
   $('pagina-preco').hidden = pagina !== 'preco';
   $('pagina-preco2').hidden = pagina !== 'preco2';
+  $('pagina-preco3').hidden = pagina !== 'preco3';
   if (pagina === 'analise') {
     if (estado.analisePendente) atualizarAnalise();
     else Object.values(estado.graficos).forEach((g) => g.resize());
@@ -666,6 +670,10 @@ function trocarPagina(pagina) {
     // o produto é compartilhado com outras abas: se mudou lá, recalcula aqui
     if (estado.preco2Pendente || estado.p2.produtoUsado !== estado.produtoCompartilhado) atualizarPreco2();
     else desenharPreco2();
+  }
+  if (pagina === 'preco3') {
+    if (estado.preco3Pendente || estado.p3.produtoUsado !== estado.produtoCompartilhado) atualizarPreco3();
+    else desenharPreco3();
   }
 }
 
@@ -1674,27 +1682,44 @@ function prepararPreco2() {
     },
   });
   s.apres = criarSeletorPreco('dd-p2-apres', { unico: false, vazio: 'Todas', limpar: true, aoMudar: atualizarPreco2 });
-  // controle deslizante: base inteira por padrão
+  // controle deslizante (compartilhado com a aba Preço 3): base inteira por padrão
   const n = estado.meses.length;
-  for (const id of ['p2-ini', 'p2-fim']) { $(id).min = 0; $(id).max = Math.max(0, n - 1); }
-  $('p2-ini').value = 0;
-  $('p2-fim').value = Math.max(0, n - 1);
-  $('p2-tempo').hidden = !n;
+  for (const pre of ABAS_TEMPO) {
+    for (const id of [`${pre}-ini`, `${pre}-fim`]) { $(id).min = 0; $(id).max = Math.max(0, n - 1); }
+    $(`${pre}-tempo`).hidden = !n;
+  }
+  estado.tempo = { ini: 0, fim: Math.max(0, n - 1) };
   atualizarRotulosTempo();
   estado.p2.ocultas = new Set();
   estado.preco2Pendente = true;
 }
 
+// abas com o controle de período compartilhado (prefixo dos ids no HTML)
+const ABAS_TEMPO = ['p2', 'p3'];
+estado.tempo = { ini: 0, fim: 0 };
+
+// leva o período compartilhado para os controles das duas abas
 function atualizarRotulosTempo() {
-  const ini = Number($('p2-ini').value);
-  const fim = Number($('p2-fim').value);
-  $('p2-ini-txt').value = estado.meses[ini] || '';
-  $('p2-fim-txt').value = estado.meses[fim] || '';
-  // pinta o trecho escolhido do trilho
+  const { ini, fim } = estado.tempo;
   const n = Math.max(1, estado.meses.length - 1);
-  $('p2-trilho').style.background =
-    `linear-gradient(90deg, #ccc ${ini / n * 100}%, var(--amarelo) ${ini / n * 100}%, var(--amarelo) ${fim / n * 100}%, #ccc ${fim / n * 100}%)`;
+  for (const pre of ABAS_TEMPO) {
+    $(`${pre}-ini`).value = ini;
+    $(`${pre}-fim`).value = fim;
+    $(`${pre}-ini-txt`).value = estado.meses[ini] || '';
+    $(`${pre}-fim-txt`).value = estado.meses[fim] || '';
+    // pinta o trecho escolhido do trilho
+    $(`${pre}-trilho`).style.background =
+      `linear-gradient(90deg, #ccc ${ini / n * 100}%, var(--amarelo) ${ini / n * 100}%, var(--amarelo) ${fim / n * 100}%, #ccc ${fim / n * 100}%)`;
+  }
 }
+
+// cores fixas por apresentação (ordem alfabética dentro do produto), iguais nas abas Preço 2 e 3
+function coresPorApresentacao(todas) {
+  const cores = {};
+  todas.forEach((v, i) => { cores[v] = CORES[i % CORES.length]; });
+  return cores;
+}
+const ordemApresentacao = (a, b) => String(a).localeCompare(String(b), 'pt-BR', { numeric: true });
 
 const exprProdutoCorp = `(d_produto || ' (' || sigla || ')')`;
 
@@ -1728,13 +1753,12 @@ async function atualizarPreco2() {
 
   // apresentações do produto (todas definem as cores fixas)
   const apres = await consultar(`SELECT DISTINCT d_apres AS v FROM fato ${e(condProduto)}`);
-  const todas = apres.map((l) => l.v).sort((a, b) => String(a).localeCompare(String(b), 'pt-BR', { numeric: true }));
+  const todas = apres.map((l) => l.v).sort(ordemApresentacao);
   s.apres.opcoes = todas;
   for (const v of [...s.apres.valores]) if (!todas.includes(v)) s.apres.valores.delete(v);
   s.produto.desenhar();
   s.apres.desenhar();
-  const cores = {};
-  todas.forEach((v, i) => { cores[v] = CORES[i % CORES.length]; });
+  const cores = coresPorApresentacao(todas);
 
   const condApres = s.apres.valores.size
     ? `d_apres IN (${[...s.apres.valores].map(sqlTexto).join(', ')})` : 'TRUE';
@@ -1785,8 +1809,7 @@ function desenharMensalP2(mensal) {
     return;
   }
   $('p2-mensal-card').hidden = false;
-  const ini = Number($('p2-ini').value);
-  const fim = Number($('p2-fim').value);
+  const { ini, fim } = estado.tempo;
   const meses = mensal.slice(ini, fim + 1).map((m) => {
     const rcdU = precoMedio(m.rcd, m.und);
     const rcU = precoMedio(m.rc, m.und);
@@ -1904,17 +1927,204 @@ $('p2-legenda').addEventListener('click', (e) => {
   }
 });
 
-// alças do período: a inicial nunca passa a final
-['p2-ini', 'p2-fim'].forEach((id) => $(id).addEventListener('input', () => {
-  const ini = $('p2-ini');
-  const fim = $('p2-fim');
-  if (Number(ini.value) > Number(fim.value)) {
-    if (id === 'p2-ini') ini.value = fim.value; else fim.value = ini.value;
+// alças do período (iguais nas abas Preço 2 e 3): a inicial nunca passa a final
+for (const pre of ABAS_TEMPO) {
+  for (const lado of ['ini', 'fim']) {
+    $(`${pre}-${lado}`).addEventListener('input', (e) => {
+      const v = Number(e.target.value);
+      if (lado === 'ini') estado.tempo = { ini: Math.min(v, estado.tempo.fim), fim: estado.tempo.fim };
+      else estado.tempo = { ini: estado.tempo.ini, fim: Math.max(v, estado.tempo.ini) };
+      atualizarRotulosTempo();
+      if (pre === 'p2' && estado.p2.dados) desenharMensalP2(estado.p2.dados.mensal);
+      if (pre === 'p3') desenharPreco3();
+    });
   }
-  atualizarRotulosTempo();
-  if (estado.p2.dados) desenharMensalP2(estado.p2.dados.mensal);
-}));
+}
 
 window.addEventListener('resize', () => {
   if (estado.pagina === 'preco2') desenharPreco2();
 });
+
+// =====================================================================
+// Aba Preço 3: preço médio mensal e market share por apresentação
+// =====================================================================
+const MEDIDAS_P3_PRECO = {
+  rc: { rotulo: 'RC/UND', pct: false, calc: (m) => precoMedio(m.c, m.u) },
+  rcd: { rotulo: 'RCD/UND', pct: false, calc: (m) => precoMedio(m.r, m.u) },
+  pf: { rotulo: 'PF/UND', pct: false, calc: (m) => precoMedio(m.p, m.u) },
+  desc: { rotulo: 'Desc. Com.', pct: true, calc: (m) => descontoCom(precoMedio(m.r, m.u), precoMedio(m.p, m.u)) },
+  margem: {
+    rotulo: 'Margem PDV', pct: true,
+    calc: (m) => { const rcd = precoMedio(m.r, m.u); const rc = precoMedio(m.c, m.u); return rcd !== null && rc ? 1 - rcd / rc : null; },
+  },
+  mkup: {
+    rotulo: 'MKUP DIST', pct: true,
+    calc: (m) => { const rcd = precoMedio(m.r, m.u); const rc = precoMedio(m.c, m.u); return rc !== null && rcd ? rc / rcd - 1 : null; },
+  },
+};
+const MEDIDAS_P3_SHARE = { u: 'Unidades', r: 'RCD', c: 'RCON', p: 'RPF' };
+
+estado.p3 = { seletores: {}, graficos: {}, ocultas: new Set(), produtoUsado: null, dados: null };
+
+function prepararPreco3() {
+  estado.p3.seletores.produto = criarSeletorPreco('dd-p3-produto', {
+    unico: true, vazio: '(escolha)',
+    aoMudar: () => {
+      estado.produtoCompartilhado = [...estado.p3.seletores.produto.valores][0] || null;
+      atualizarPreco3();
+    },
+  });
+  estado.p3.ocultas = new Set();
+  estado.preco3Pendente = true;
+}
+
+// produtos que passam pelos filtros; o escolhido é o compartilhado (padrão: maior RCD MAT)
+async function escolherProduto(seletor, where) {
+  const produtos = await consultar(`SELECT ${exprProdutoCorp} AS v, SUM(rcd_MAT0) AS r FROM fato ${where} GROUP BY 1`);
+  seletor.opcoes = produtos.map((l) => l.v).sort((a, b) => String(a).localeCompare(String(b), 'pt-BR'));
+  let produto = estado.produtoCompartilhado;
+  if (!produto || !seletor.opcoes.includes(produto)) {
+    const maior = produtos.reduce((m, l) => (!m || (l.r || 0) > (m.r || 0) ? l : m), null);
+    produto = maior ? maior.v : null;
+    estado.produtoCompartilhado = produto;
+  }
+  seletor.valores = new Set(produto ? [produto] : []);
+  seletor.desenhar();
+  return produto;
+}
+
+async function atualizarPreco3() {
+  estado.preco3Pendente = false;
+  const where = clausulaWhere(null);
+  const e = (cond) => (where ? `${where} AND ${cond}` : `WHERE ${cond}`);
+  const produto = await escolherProduto(estado.p3.seletores.produto, where);
+  estado.p3.produtoUsado = produto;
+  if (!produto) {
+    estado.p3.dados = null;
+    $('kpis-p3').innerHTML = '';
+    $('p3-legenda').innerHTML = '';
+    $('p3-aviso').textContent = 'Nenhum produto com os filtros atuais.';
+    Object.values(estado.p3.graficos).forEach((g) => g.clear());
+    return;
+  }
+  $('p3-aviso').textContent = estado.meses.length ? '' : 'A base não tem colunas mensais (ex.: "ago-21"), então os gráficos mensais ficam vazios.';
+  const condProduto = `${exprProdutoCorp} = ${sqlTexto(produto)}`;
+  atualizarKpis('MAT', e(condProduto), 'kpis-p3');
+
+  const somas = estado.meses.map((_, i) =>
+    `SUM(rcd_m${i}) r${i}, SUM(und_m${i}) u${i}, SUM(rc_m${i}) c${i}, SUM(pf_m${i}) p${i}`).join(', ');
+  const linhas = await consultar(`SELECT d_apres AS apres${somas ? ', ' + somas : ''} FROM fato ${e(condProduto)} GROUP BY 1`);
+  linhas.sort((a, b) => ordemApresentacao(a.apres, b.apres));
+  const cores = coresPorApresentacao(linhas.map((l) => l.apres));
+  // por apresentação: lista de meses com r (RCD), u (UND), c (RCON), p (RPF)
+  const series = linhas.map((l) => ({
+    apres: l.apres,
+    meses: estado.meses.map((_, i) => ({ r: l['r' + i], u: l['u' + i], c: l['c' + i], p: l['p' + i] })),
+  }));
+  estado.p3.dados = { series, cores };
+  desenharPreco3();
+}
+
+function graficoP3(id) {
+  if (!estado.p3.graficos[id]) estado.p3.graficos[id] = echarts.init($(id));
+  return estado.p3.graficos[id];
+}
+
+// rótulos de uma linha só no início, no fim, no pico e no vale (ignorando meses vazios)
+function pontosChaveComVazios(valores) {
+  const validos = valores.map((v, i) => [v, i]).filter(([v]) => valido(v));
+  if (!validos.length) return new Set();
+  let max = validos[0], min = validos[0];
+  for (const p of validos) { if (p[0] > max[0]) max = p; if (p[0] < min[0]) min = p; }
+  return new Set([validos[0][1], validos[validos.length - 1][1], max[1], min[1]]);
+}
+
+function desenharPreco3() {
+  const d = estado.p3.dados;
+  if (!d || !estado.meses.length || estado.pagina !== 'preco3') return;
+  const { ini, fim } = estado.tempo;
+  const rotulosX = estado.meses.slice(ini, fim + 1);
+  const medida1 = MEDIDAS_P3_PRECO[$('p3-medida1').value];
+  const campo2 = $('p3-medida2').value;
+  $('p3-titulo1').textContent = `Preço Médio ${medida1.rotulo}`;
+  $('p3-titulo2').textContent = `Market Share ${MEDIDAS_P3_SHARE[campo2]}`;
+
+  // mesma largura nos dois gráficos (meses alinhados); muitos meses => rolagem horizontal
+  const largura = Math.max($('p3-rolagem1').clientWidth, rotulosX.length * LARGURA_MES + 130);
+  $('p3-g1').style.width = largura + 'px';
+  $('p3-g2').style.width = largura + 'px';
+  const selecionadas = Object.fromEntries(d.series.map((s) => [s.apres, !estado.p3.ocultas.has(s.apres)]));
+  const eixoX = { type: 'category', data: rotulosX, axisLabel: { rotate: 90, fontSize: 10, interval: 0 } };
+  const fmtValor = (v) => (medida1.pct ? percentual(v) : fmt2.format(v));
+
+  // ----- Gráfico 01: preço médio mensal por apresentação -----
+  const g1 = graficoP3('p3-g1');
+  g1.resize();
+  g1.setOption({
+    animation: false,
+    legend: { show: false, data: d.series.map((s) => s.apres), selected: selecionadas },
+    tooltip: {
+      trigger: 'item',
+      formatter: (p) => `${escaparHtml(p.seriesName)}<br>${p.name}: <b>${medida1.pct ? percentual(p.value) : reais(p.value)}</b>`,
+    },
+    grid: { left: 64, right: 24, top: 24, bottom: 50 },
+    labelLayout: { hideOverlap: true, moveOverlap: 'shiftY' },
+    xAxis: eixoX,
+    yAxis: {
+      type: 'value', scale: true,
+      axisLabel: { formatter: (v) => (medida1.pct ? fmt0.format(v * 100) + '%' : 'R$ ' + fmt0.format(v)) },
+    },
+    series: d.series.map((s) => {
+      const valores = s.meses.slice(ini, fim + 1).map(medida1.calc);
+      const chave = pontosChaveComVazios(valores);
+      return {
+        name: s.apres, type: 'line', connectNulls: false, symbolSize: 5,
+        itemStyle: { color: d.cores[s.apres] }, lineStyle: { width: 2 },
+        data: valores.map((v, i) => ({ value: v, label: { show: chave.has(i) } })),
+        label: { position: 'top', fontSize: 10, color: d.cores[s.apres], fontWeight: 'bold', formatter: (p) => fmtValor(p.value) },
+      };
+    }),
+  }, true);
+
+  // ----- Gráfico 02: participação de cada apresentação no total do produto (100%) -----
+  const valoresMes = d.series.map((s) => s.meses.slice(ini, fim + 1).map((m) => (valido(m[campo2]) ? m[campo2] : 0)));
+  const totais = rotulosX.map((_, i) => valoresMes.reduce((t, v) => t + v[i], 0));
+  const g2 = graficoP3('p3-g2');
+  g2.resize();
+  g2.setOption({
+    animation: false,
+    legend: { show: false, data: d.series.map((s) => s.apres), selected: selecionadas },
+    tooltip: {
+      trigger: 'item',
+      formatter: (p) => `${escaparHtml(p.seriesName)}<br>${p.name}: <b>${percentual(p.value / 100)}</b> (${inteiro(valoresMes[p.seriesIndex][p.dataIndex])})`,
+    },
+    grid: { left: 64, right: 24, top: 24, bottom: 50 },
+    xAxis: eixoX,
+    yAxis: { type: 'value', max: 100, axisLabel: { formatter: (v) => v + '%' } },
+    series: d.series.map((s, si) => ({
+      name: s.apres, type: 'bar', stack: 'share', barMaxWidth: 40,
+      itemStyle: { color: d.cores[s.apres] },
+      data: valoresMes[si].map((v, i) => {
+        const share = totais[i] > 0 ? (v / totais[i]) * 100 : null;
+        return { value: share, label: { show: share !== null && share > 8 } };
+      }),
+      label: { position: 'inside', fontSize: 9, color: corTexto(d.cores[s.apres]), formatter: (p) => fmt1.format(p.value) + '%' },
+    })),
+  }, true);
+
+  // ----- legenda única (clique oculta/mostra a apresentação nos dois gráficos) -----
+  $('p3-legenda').innerHTML = d.series.map((s, i) =>
+    `<div class="leg-item${estado.p3.ocultas.has(s.apres) ? ' oculta' : ''}" data-i="${i}" title="${escaparHtml(s.apres)}">
+      <span class="leg-cor" style="background:${d.cores[s.apres]}"></span><span class="leg-nome">${escaparHtml(s.apres)}</span></div>`).join('');
+}
+
+$('p3-legenda').addEventListener('click', (e) => {
+  const item = e.target.closest('.leg-item');
+  if (!item || !estado.p3.dados) return;
+  const nome = estado.p3.dados.series[Number(item.dataset.i)].apres;
+  if (estado.p3.ocultas.has(nome)) estado.p3.ocultas.delete(nome); else estado.p3.ocultas.add(nome);
+  item.classList.toggle('oculta', estado.p3.ocultas.has(nome));
+  for (const g of Object.values(estado.p3.graficos)) g.dispatchAction({ type: 'legendToggleSelect', name: nome });
+});
+['p3-medida1', 'p3-medida2'].forEach((id) => $(id).addEventListener('change', desenharPreco3));
+window.addEventListener('resize', () => { if (estado.pagina === 'preco3') desenharPreco3(); });

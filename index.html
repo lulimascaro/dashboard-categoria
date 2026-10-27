@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dashboard de Mercado Farmacêutico</title>
   <!-- Ao publicar uma nova versão, atualize o número "?v=" nas duas linhas abaixo -->
-  <link rel="stylesheet" href="style.css?v=20261027-5">
+  <link rel="stylesheet" href="style.css?v=20261027-6">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
-  <script type="module" src="app.js?v=20261027-5"></script>
+  <script type="module" src="app.js?v=20261027-6"></script>
 </head>
 <body>
 
@@ -53,6 +53,7 @@
         <button class="aba" data-pagina="analise">Gráfico e Tabela</button>
         <button class="aba" data-pagina="preco">Preço</button>
         <button class="aba" data-pagina="preco2">Preço 2</button>
+        <button class="aba" data-pagina="preco3">Preço 3</button>
       </nav>
       <button class="botao-link" id="btn-trocar">Trocar arquivo</button>
     </header>
@@ -202,6 +203,62 @@
               <div class="card-p2"><h3>RCD</h3><div class="grafico-p2" id="p2-rcd"></div></div>
               <div class="card-p2"><h3>RC</h3><div class="grafico-p2" id="p2-rc"></div></div>
               <div class="card-p2"><h3>Desconto Comercial</h3><div class="grafico-p2" id="p2-desc"></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Página 5: Preço 3 -->
+    <main id="pagina-preco3" class="pagina" hidden>
+      <div class="barra-seletores">
+        <div class="seletor"><span>Produto</span><div class="dropdown" id="dd-p3-produto"></div></div>
+        <div class="seletor" id="p3-tempo"><span>Tempo</span>
+          <input type="text" id="p3-ini-txt" class="caixa-mes" readonly>
+          <div class="duplo-slider">
+            <div id="p3-trilho" class="trilho"></div>
+            <input type="range" id="p3-ini" aria-label="Mês inicial">
+            <input type="range" id="p3-fim" aria-label="Mês final">
+          </div>
+          <input type="text" id="p3-fim-txt" class="caixa-mes" readonly>
+        </div>
+        <label>Medida Gráfico 01
+          <select id="p3-medida1">
+            <option value="rc">RC/UND</option>
+            <option value="rcd">RCD/UND</option>
+            <option value="pf">PF/UND</option>
+            <option value="desc">Desc. Com.</option>
+            <option value="margem">Margem PDV</option>
+            <option value="mkup">MKUP DIST</option>
+          </select>
+        </label>
+        <label>Medida Gráfico 02
+          <select id="p3-medida2">
+            <option value="u">Unidades</option>
+            <option value="r">RCD</option>
+            <option value="c">RCON</option>
+            <option value="p">RPF</option>
+          </select>
+        </label>
+      </div>
+      <div class="layout-analise">
+        <aside class="coluna-kpis"><div id="kpis-p3"></div></aside>
+        <div class="area-principal">
+          <div id="p3-aviso"></div>
+          <div class="p3-grade">
+            <div class="p3-graficos">
+              <div class="card-grafico">
+                <h3 class="cab-rcd" id="p3-titulo1">Preço Médio</h3>
+                <div id="p3-rolagem1" class="rolagem-x"><div id="p3-g1" class="grafico-p3"></div></div>
+              </div>
+              <div class="card-grafico">
+                <h3 class="cab-rcd" id="p3-titulo2">Market Share</h3>
+                <div id="p3-rolagem2" class="rolagem-x"><div id="p3-g2" class="grafico-p3"></div></div>
+              </div>
+            </div>
+            <div class="card-legenda p3-card-legenda">
+              <h3>Legenda</h3>
+              <div id="p3-legenda"></div>
             </div>
           </div>
         </div>
