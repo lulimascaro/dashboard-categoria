@@ -127,13 +127,16 @@ body {
   display: flex; align-items: center; gap: 6px; font-weight: 600;
   border-bottom: 1px solid #eee; padding-bottom: 4px; margin-bottom: 4px; cursor: pointer;
 }
-.cf-lista { height: 170px; overflow-y: auto; font-size: 12.5px; }
+.cf-lista { height: 170px; overflow-y: auto; font-size: 12.5px; position: relative; }
+.cf-espaco { position: relative; }
+.cf-janela { position: absolute; left: 0; right: 0; top: 0; will-change: transform; }
 .cf-lista label {
-  display: flex; align-items: flex-start; gap: 6px; padding: 2px 0; cursor: pointer;
-  word-break: break-word;
+  display: flex; align-items: center; gap: 6px; height: 22px; cursor: pointer; white-space: nowrap;
 }
+.cf-lista label span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .cf-lista label:hover { background: #F4F5FA; }
 .cf-lista input, .cf-tudo input { margin-top: 2px; accent-color: var(--azul); }
+.cf-lista input { margin: 0; flex-shrink: 0; }
 .cf-aviso { color: #888; font-size: 11px; padding: 4px 0; }
 
 .rodape-filtros { text-align: center; padding: 16px 0 30px; }
@@ -406,3 +409,7 @@ sup.ip {
 }
 .nota-ip { font-size: 12px; color: #666; }
 .nota-ip:empty { display: none; }
+
+/* descrições longas: o card "Apresentação" ocupa duas colunas */
+#card-apres { grid-column: span 2; }
+@media (max-width: 640px) { #card-apres { grid-column: auto; } }

@@ -19,7 +19,7 @@ const DIMENSOES = [
   { key: 'bu', rotulo: 'BU', coluna: 'DIVISAO', secao: 'PRODUTO' },
   { key: 'lab', rotulo: 'Laboratório', coluna: 'Laboratorio', secao: 'PRODUTO' },
   { key: 'produto', rotulo: 'Produto', coluna: 'Produto', secao: 'PRODUTO' },
-  { key: 'apres', rotulo: 'DC Apresentação', coluna: 'Apresentacao Desc Longa', secao: 'PRODUTO' },
+  { key: 'apres', rotulo: 'Apresentação', coluna: 'Apresentacao Desc Longa', secao: 'PRODUTO' },
   { key: 'tipoforma', rotulo: 'Tipo de Formato', coluna: 'Tipo_forma_aplicacao', secao: 'PRODUTO' },
   { key: 'forma', rotulo: 'Formato Aplicação', coluna: 'Forma_aplicacao', secao: 'PRODUTO' },
   { key: 'padrao', rotulo: 'Padrão SKU', coluna: 'PADRÃO SKU', secao: 'PRODUTO' },
@@ -44,7 +44,7 @@ const CORES = ['#6B76A6', '#A58BDB', '#F2C94C', '#4FA3A5', '#E07B53', '#8BB174',
   '#7FB3D5', '#D4AC0D', '#6C3483', '#48C9B0', '#CB4335', '#85929E', '#F0B27A'];
 const COR_OUTROS = '#BDBDBD';
 const MAX_SERIES = 50;          // limite de segurança de cores no gráfico (o resto vira "Outros")
-const MAX_OPCOES_VISIVEIS = 300; // itens mostrados por card de filtro
+const MAX_OPCOES_VISIVEIS = 300; // itens mostrados nas caixas suspensas das abas de preço
 const MAX_LINHAS_TABELA = 1000;
 
 // ---------------------------------------------------------------------
@@ -415,7 +415,17 @@ function criarCardFiltro(d) {
   const tudo = card.querySelector('.cf-tudo input');
   const lista = card.querySelector('.cf-lista');
 
-  busca.addEventListener('input', () => { estado.busca[d.key] = busca.value; renderizarLista(d.key); });
+  // busca com pequena espera, para não refazer a lista a cada letra digitada
+  let espera = null;
+  busca.addEventListener('input', () => {
+    clearTimeout(espera);
+    espera = setTimeout(() => { estado.busca[d.key] = busca.value; lista.scrollTop = 0; renderizarLista(d.key); }, 120);
+  });
+  // lista virtual: ao rolar, só as linhas visíveis são desenhadas
+  lista.addEventListener('scroll', () => {
+    if (card._quadro) return;
+    card._quadro = requestAnimationFrame(() => { card._quadro = null; desenharJanelaLista(card, d.key); });
+  });
 
   tudo.addEventListener('change', () => {
     const texto = estado.busca[d.key].trim();
@@ -430,39 +440,67 @@ function criarCardFiltro(d) {
   lista.addEventListener('change', (ev) => {
     const caixa = ev.target;
     if (!caixa.dataset || caixa.dataset.i === undefined) return;
-    const valor = card._visiveis[Number(caixa.dataset.i)];
+    const valor = card._filtradas[Number(caixa.dataset.i)];
     marcar(d.key, [valor], caixa.checked);
     aoMudarFiltro();
   });
   return card;
 }
 
+// busca em qualquer parte do texto, ignorando acentos, maiúsculas, espaços e pontuação
+// (ex.: "10000FCC X 30" ou "menta"); os textos já normalizados ficam guardados
 function opcoesFiltradas(key) {
   const texto = normalizar(estado.busca[key] || '');
   const todas = estado.opcoes[key] || [];
-  return texto ? todas.filter((v) => normalizar(v).includes(texto)) : todas;
+  if (!texto) return todas;
+  if (!estado.opcoesNorm || estado.opcoesNorm[key]?.origem !== todas) {
+    estado.opcoesNorm = estado.opcoesNorm || {};
+    estado.opcoesNorm[key] = { origem: todas, norm: todas.map(normalizar) };
+  }
+  const norm = estado.opcoesNorm[key].norm;
+  return todas.filter((_, i) => norm[i].includes(texto));
 }
+
+const ALTURA_LINHA_FILTRO = 22; // px de cada linha da lista (fixa, para a lista virtual)
 
 function renderizarLista(key) {
   const card = $('card-' + key);
   if (!card) return;
   const f = estado.filtros[key];
   const filtradas = opcoesFiltradas(key);
-  const visiveis = filtradas.slice(0, MAX_OPCOES_VISIVEIS);
-  card._visiveis = visiveis;
-  let html = visiveis.map((v, i) =>
-    `<label><input type="checkbox" data-i="${i}" ${estaMarcado(f, v) ? 'checked' : ''}> ${escaparHtml(v)}</label>`).join('');
-  if (filtradas.length > visiveis.length) {
-    html += `<div class="cf-aviso">Mostrando ${inteiro(visiveis.length)} de ${inteiro(filtradas.length)}. Use a busca para encontrar outros.</div>`;
+  card._filtradas = filtradas;
+  const lista = card.querySelector('.cf-lista');
+  if (!filtradas.length) {
+    lista.innerHTML = '<div class="cf-aviso">Nenhuma opção.</div>';
+  } else {
+    if (!lista.querySelector('.cf-espaco')) lista.innerHTML = '<div class="cf-espaco"><div class="cf-janela"></div></div>';
+    lista.querySelector('.cf-espaco').style.height = filtradas.length * ALTURA_LINHA_FILTRO + 'px';
+    desenharJanelaLista(card, key);
   }
-  if (!filtradas.length) html = '<div class="cf-aviso">Nenhuma opção.</div>';
-  card.querySelector('.cf-lista').innerHTML = html;
 
   const tudo = card.querySelector('.cf-tudo input');
   const marcados = filtradas.filter((v) => estaMarcado(f, v)).length;
   tudo.checked = filtradas.length > 0 && marcados === filtradas.length;
   tudo.indeterminate = marcados > 0 && marcados < filtradas.length;
   card.classList.toggle('com-filtro', filtroAtivo(f));
+}
+
+// desenha só as linhas que aparecem na área visível (mais uma margem)
+function desenharJanelaLista(card, key) {
+  const lista = card.querySelector('.cf-lista');
+  const janela = lista.querySelector('.cf-janela');
+  const filtradas = card._filtradas || [];
+  if (!janela) return;
+  const f = estado.filtros[key];
+  const inicio = Math.max(0, Math.floor(lista.scrollTop / ALTURA_LINHA_FILTRO) - 10);
+  const fim = Math.min(filtradas.length, inicio + Math.ceil(lista.clientHeight / ALTURA_LINHA_FILTRO) + 20);
+  janela.style.transform = `translateY(${inicio * ALTURA_LINHA_FILTRO}px)`;
+  let html = '';
+  for (let i = inicio; i < fim; i++) {
+    const v = filtradas[i];
+    html += `<label title="${escaparHtml(v)}"><input type="checkbox" data-i="${i}" ${estaMarcado(f, v) ? 'checked' : ''}><span>${escaparHtml(v)}</span></label>`;
+  }
+  janela.innerHTML = html;
 }
 
 let temporizador = null;
