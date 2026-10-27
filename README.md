@@ -43,6 +43,9 @@ virtual na base: os meses 1–12 da EL entram no MAT atual e os meses 13–24 fo
 **MAT+1** (os SKUs reais são projetados pela evolução definida no bloco "Projeção MAT+1" da aba EL).
 Desligado, o dashboard fica exatamente como sem as ELs.
 
+A página **EL Compilado** junta todas as ELs num OnePage (cards, gráficos e tabela resumo) pensado
+para imprimir em uma folha A4 paisagem (botão "Imprimir / PDF").
+
 O `exemplo_el.html` é **fictício**, apenas para teste.
 
 ## Como publicar no GitHub Pages
@@ -71,3 +74,4 @@ O número aparece no rodapé do site.
 | `exemplo_infoprice.csv` | Preços Infoprice fictícios para teste |
 | `el.js` | Aba EL (Estudo de Lançamento) |
 | `exemplo_el.html` | EL fictícia para teste |
+| `compilado.js` | Página EL Compilado (OnePage de todas as ELs) |

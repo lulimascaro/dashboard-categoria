@@ -905,6 +905,24 @@ try { projecao = { ...projecao, ...(JSON.parse(localStorage.getItem(CHAVE_PROJ) 
 window.estudosEL = {
   lista: () => els.lista,
   descarregar: () => descarregar(),
+  // números já calculados de uma EL (para a página EL Compilado)
+  metricas: (el) => ({
+    id: el.id,
+    nome: nomeEL(el),
+    produto: String((el.classif && el.classif.produto) || el.info.produto || 'EL sem nome').trim(),
+    padrao: el.info.padraoSku || '',
+    tipoLista: String(el.info.tipoLista || '').trim(),
+    meses: Array.from({ length: 24 }, (_, i) => ({
+      un: valorMes(el, 'dem', i, 'un'), pf: valorMes(el, 'dem', i, 'pf'), rcd: valorMes(el, 'dem', i, 'ppp'), rc: valorMes(el, 'dem', i, 'cpp'),
+      sellUn: valorMes(el, 'sell', i, 'un'), fatB: valorMes(el, 'sell', i, 'fatB'), fatL: valorMes(el, 'sell', i, 'fatL'),
+      estUn: num(el.est.m[i].un), estDia: num(el.est.m[i].dia),
+    })),
+    desc1: num(el.prec.ano1.desc),
+    refRc: num(el.comp.ref.cpp),
+    cpv: [num(el.prec.ano1.cpv), num(el.prec.ano2.cpv)],
+    // investimento (R$) por ano: Comercial + MKT
+    invest: ['a1', 'a2'].map((a) => (somar(el.inv.com.map((m) => m[a])) || 0) + (somar(el.inv.mkt.map((m) => m[a])) || 0)),
+  }),
   // Demanda calculada (k): 24 meses × { un, pf, ppp, cpp }
   demanda: (el) => Array.from({ length: 24 }, (_, i) => Object.fromEntries(DEM_COLS.map(([k]) => [k, valorMes(el, 'dem', i, k)]))),
   projecao: () => ({ ...projecao }),

@@ -5,10 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dashboard de Mercado Farmacêutico</title>
   <!-- Ao publicar uma nova versão, atualize o número "?v=" nas duas linhas abaixo -->
-  <link rel="stylesheet" href="style.css?v=20261027-13">
+  <link rel="stylesheet" href="style.css?v=20261027-14">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
-  <script type="module" src="app.js?v=20261027-13"></script>
-  <script type="module" src="el.js?v=20261027-13"></script>
+  <script type="module" src="app.js?v=20261027-14"></script>
+  <script type="module" src="el.js?v=20261027-14"></script>
+  <script type="module" src="compilado.js?v=20261027-14"></script>
 </head>
 <body>
 
@@ -336,6 +337,34 @@
       </div>
       <div id="el-folha" class="el-folha"></div>
       <div class="el-add"><button type="button" class="botao botao-principal" id="el-nova">+ Adicionar outro SKU (nova EL)</button></div>
+    </main>
+
+    <!-- Página: EL Compilado (OnePage de todas as ELs, A4 paisagem) -->
+    <main id="pagina-elcomp" class="pagina" hidden>
+      <div class="barra-seletores">
+        <div class="seletor"><span>ELs</span><div class="dropdown" id="ec-els"></div></div>
+        <div class="seletor"><span>Visão</span>
+          <div class="ec-alterna" id="ec-visao">
+            <button type="button" class="ativo" data-visao="marca">Marca total</button><button type="button" data-visao="sku">Por SKU</button>
+          </div>
+        </div>
+        <label>Medida <select id="ec-medida"></select></label>
+        <button type="button" class="botao-pequeno ec-imprimir" id="ec-imprimir">🖨 Imprimir / PDF</button>
+      </div>
+      <div class="ec-vazio" id="ec-vazio" hidden>Nenhuma EL ainda. Importe ou crie ELs na página <b>EL</b>.</div>
+      <div class="ec-folha" id="ec-folha">
+        <div class="ec-cabecalho"><h2 id="ec-titulo">EL Compilado</h2><span id="ec-subtitulo"></span></div>
+        <div class="ec-cards" id="ec-cards"></div>
+        <div class="ec-graficos">
+          <div class="ec-g ec-g-linhas" id="ec-g-linhas"></div>
+          <div class="ec-g" id="ec-g-barras"></div>
+          <div class="ec-legenda-card"><h3>Legenda</h3><div id="ec-legenda"></div></div>
+          <div class="ec-g" id="ec-g-estoque"></div>
+          <div class="ec-g" id="ec-g-dias"></div>
+        </div>
+        <table class="ec-tabela" id="ec-tabela"></table>
+        <p class="ec-nota">Valores da Demanda e do Sell-In em milhares (k). Margem Bruta = Fat. Líquido − Sell-In UN × CPV; Margem de Contribuição = Margem Bruta − Investimento (Comercial + MKT). Share UN = Demanda das ELs ÷ (mercado filtrado + ELs); Ano 2 usa o mercado projetado (MAT+1). Clique numa linha da tabela para filtrar os gráficos (Ctrl+clique para várias).</p>
+      </div>
     </main>
   </div>
 

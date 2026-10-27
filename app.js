@@ -736,6 +736,8 @@ async function trocarPagina(pagina) {
   $('pagina-preco2').hidden = pagina !== 'preco2';
   $('pagina-preco3').hidden = pagina !== 'preco3';
   $('pagina-el').hidden = pagina !== 'el';
+  $('pagina-elcomp').hidden = pagina !== 'elcomp';
+  if (pagina === 'elcomp' && window.compilado) window.compilado.mostrar();
   if (pagina === 'analise') {
     if (estado.analisePendente) atualizarAnalise();
     else Object.values(estado.graficos).forEach((g) => g.resize());
@@ -2916,6 +2918,14 @@ window.painelEL = {
     return l && l.n ? l : null;
   },
   sugestao: () => estado.sugestaoProj,
+  // unidades do mercado filtrado (só SKUs reais): MAT atual e MAT+1 projetado
+  async mercadoUN() {
+    if (!estado.conn) return null;
+    const where = clausulaWhere(null);
+    const [m] = await consultar(`SELECT SUM(und_MAT0) a1, SUM(und_MAT0 * ${1 + evolucaoProj().und}) a2
+      FROM fato ${where ? where + ' AND NOT is_el' : 'WHERE NOT is_el'}`);
+    return m;
+  },
   periodo: () => {
     const j = indicesJanela('MAT', 0);
     const proj = rotulosProjetados();
@@ -2962,6 +2972,7 @@ const PAGINAS = [
   ['preco2', 'Preço 2'],
   ['preco3', 'Preço 3'],
   ['el', 'EL'],
+  ['elcomp', 'EL Compilado'],
 ];
 
 function montarMenu() {
@@ -2986,3 +2997,5 @@ function marcarMenu(pagina) {
 }
 
 montarMenu(); // no fim do arquivo: a lista PAGINAS já existe
+// caixa suspensa reaproveitada pela página EL Compilado (compilado.js)
+window.componentes = { criarSeletor: criarSeletorPreco };
