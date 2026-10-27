@@ -1505,30 +1505,32 @@ function desenharPreco() {
   const g = estado.graficoPreco;
   const posIndex = itens.indexOf(idx);
   const largura = (el.clientWidth - LARGURA_ROTULO_PRECO) / itens.length;
-  const vertical = largura < 120; // pouco espaço: valores das barras na vertical
-  const rotuloBarra = {
-    show: true, position: 'top', fontSize: 10, color: '#2B2B2B',
-    rotate: vertical ? 90 : 0, align: vertical ? 'left' : 'center', verticalAlign: 'middle', distance: 4,
-    formatter: (p) => reais(p.value),
-  };
+  const tamanho = largura < 80 ? 9 : 10;
+  const rotulo = (v) => (largura < 70 ? fmt2.format(v) : reais(v)); // colunas estreitas: sem "R$"
+  // segmento de cima (PF - RCD) só existe quando é positivo
+  const difPF = (a) => (valido(a.pfU) && valido(a.rcdU) && a.pfU - a.rcdU > 0 ? a.pfU - a.rcdU : null);
+  const NOMES = ['RCD (cor da corporação)', 'PF - RCD (tom claro)', 'RC (preço ao consumidor)'];
+
   g.setOption({
     animation: false,
-    legend: {
-      left: 10, top: 6, itemWidth: 14, itemHeight: 10, textStyle: { fontSize: 11 },
-      data: ['RCD (cor da corporação)', 'PF (tom claro)', 'RC (preço ao consumidor)'],
-    },
+    legend: { left: 10, top: 6, itemWidth: 14, itemHeight: 10, textStyle: { fontSize: 11 }, data: NOMES },
     tooltip: {
       trigger: 'axis', axisPointer: { type: 'shadow' },
       formatter: (ps) => {
         const a = itens[ps[0].dataIndex];
-        return `<b>${escaparHtml(a.apres)}</b><br>${escaparHtml(a.corp)}<br>RCD/UND: ${reais(a.rcdU)}<br>PF/UND: ${reais(a.pfU)}<br><span style="color:${COR_RC}">RC/UND: ${reais(a.rcU)}</span>`;
+        const d = valido(a.pfU) && valido(a.rcdU) ? a.pfU - a.rcdU : null;
+        return `<b>${escaparHtml(a.apres)}</b><br>${escaparHtml(a.corp)}<br>
+          RCD/UND: <b>${reais(a.rcdU)}</b><br>
+          PF/UND: <b>${reais(a.pfU)}</b><br>
+          PF - RCD: <b>${reais(d)}</b> (${percentual(divisao(d, a.pfU))} do PF)<br>
+          <span style="color:${COR_RC}">RC/UND: <b>${reais(a.rcU)}</b></span>`;
       },
     },
     grid: { left: LARGURA_ROTULO_PRECO, right: 0, top: 60, bottom: 6 },
     xAxis: { type: 'category', data: itens.map((a) => a.apres), axisLabel: { show: false }, axisTick: { show: false } },
     yAxis: {
       type: 'value', axisLabel: { formatter: (v) => 'R$ ' + fmt0.format(v) },
-      max: (v) => v.max * (vertical ? 1.4 : 1.22),
+      max: (v) => v.max * 1.25,
     },
     series: [
       { // fundo amarelo-claro na coluna do index
@@ -1540,39 +1542,57 @@ function desenharPreco() {
           return { type: 'rect', shape: { x: x - w / 2, y: 0, width: w, height: cs.y + cs.height + 6 }, style: { fill: COR_INDEX } };
         },
       },
-      {
-        name: 'RCD (cor da corporação)', type: 'bar', z: 2, barGap: '8%', barCategoryGap: '30%',
+      { // segmento de baixo: RCD, com o valor em branco perto do topo
+        name: NOMES[0], type: 'bar', stack: 'preco', z: 2, barCategoryGap: '30%', barMaxWidth: 90,
         itemStyle: { color: '#6B76A6' },
         data: itens.map((a) => ({ value: a.rcdU, itemStyle: { color: cor(a) } })),
-        label: rotuloBarra,
+        label: { show: true, position: 'insideTop', distance: 4, color: '#FFFFFF', fontSize: tamanho, formatter: (p) => rotulo(p.value) },
       },
-      {
-        name: 'PF (tom claro)', type: 'bar', z: 2,
+      { // segmento de cima: PF - RCD (altura total = PF)
+        name: NOMES[1], type: 'bar', stack: 'preco', z: 2,
         itemStyle: { color: clarear('#6B76A6') },
-        data: itens.map((a) => ({ value: a.pfU, itemStyle: { color: clarear(cor(a)) } })),
-        label: rotuloBarra,
+        data: itens.map((a) => ({ value: difPF(a), itemStyle: { color: clarear(cor(a)) } })),
       },
-      { // RC: traço vermelho com o valor acima
-        name: 'RC (preço ao consumidor)', type: 'custom', z: 3, itemStyle: { color: COR_RC },
+      { // traço do RC + rótulos do RC e do PF, posicionados juntos para nunca colidirem
+        name: NOMES[2], type: 'custom', z: 3, itemStyle: { color: COR_RC },
         encode: { x: 0, y: 1 }, tooltip: { show: false },
-        data: itens.map((a, i) => [i, a.rcU, Math.max(a.rcdU || 0, a.pfU || 0)]),
+        data: itens.map((a, i) => [i, valido(a.rcU) ? a.rcU : 0]),
         renderItem: (params, api) => {
-          if (!valido(api.value(1))) return null;
-          const [x, y] = api.coord([api.value(0), api.value(1)]);
-          const w = api.size([1, 0])[0] * 0.7;
-          // o valor vermelho fica acima do traço e também acima dos valores das barras
-          const yBarra = api.coord([api.value(0), api.value(2)])[1];
-          const yTexto = Math.min(y - 5, yBarra - (vertical ? 62 : 18));
-          return {
-            type: 'group',
-            children: [
-              { type: 'line', shape: { x1: x - w / 2, y1: y, x2: x + w / 2, y2: y }, style: { stroke: COR_RC, lineWidth: 3 } },
-              {
-                type: 'text', x, y: yTexto,
-                style: { text: reais(api.value(1)), fill: COR_RC, font: 'bold 11px sans-serif', textAlign: 'center', textVerticalAlign: 'bottom' },
-              },
-            ],
-          };
+          const a = itens[params.dataIndex];
+          const x = api.coord([params.dataIndex, 0])[0];
+          const yDe = (v) => api.coord([params.dataIndex, v])[1]; // pixels: menor = mais alto
+          const temPF = difPF(a) !== null;
+          const temRC = valido(a.rcU);
+          const H = tamanho + 4; // altura de uma linha de texto
+          const yRcd = yDe(a.rcdU || 0);
+          const topo = temPF ? yDe(a.pfU) : yRcd;
+          let basePF = temPF ? topo - 4 : null; // base (parte de baixo) do texto do PF
+          let baseRC = null;
+          const filhos = [];
+          if (temRC) {
+            const yRC = yDe(a.rcU);
+            baseRC = yRC - 5;
+            if (yRC <= topo) {
+              // traço acima da barra: se o PF encostar no traço, vai logo abaixo dele;
+              // sem espaço ali (rótulo do RCD), sobe para cima do rótulo do RC
+              if (temPF && basePF - H < yRC + 3) {
+                if (yRC + 3 + H <= yRcd + 2) basePF = yRC + 3 + H;
+                else basePF = baseRC - H - 2;
+              }
+            } else {
+              // traço atravessa a barra: o rótulo do RC sobe para cima da barra (e do PF)
+              baseRC = temPF ? basePF - H - 2 : topo - 4;
+            }
+            const w = api.size([1, 0])[0] * 0.7;
+            filhos.push({ type: 'line', shape: { x1: x - w / 2, y1: yRC, x2: x + w / 2, y2: yRC }, style: { stroke: COR_RC, lineWidth: 3 } });
+            filhos.push({ type: 'text', x, y: baseRC,
+              style: { text: reais(a.rcU), fill: COR_RC, font: `bold ${tamanho + 1}px sans-serif`, textAlign: 'center', textVerticalAlign: 'bottom' } });
+          }
+          if (temPF) {
+            filhos.push({ type: 'text', x, y: basePF,
+              style: { text: rotulo(a.pfU), fill: '#3A3A3A', font: `${tamanho}px sans-serif`, textAlign: 'center', textVerticalAlign: 'bottom' } });
+          }
+          return { type: 'group', children: filhos };
         },
       },
     ],
