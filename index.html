@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dashboard de Mercado Farmacêutico</title>
   <!-- Ao publicar uma nova versão, atualize o número "?v=" nas duas linhas abaixo -->
-  <link rel="stylesheet" href="style.css?v=20261027-14">
+  <link rel="stylesheet" href="style.css?v=20261027-15">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
-  <script type="module" src="app.js?v=20261027-14"></script>
-  <script type="module" src="el.js?v=20261027-14"></script>
-  <script type="module" src="compilado.js?v=20261027-14"></script>
+  <script type="module" src="app.js?v=20261027-15"></script>
+  <script type="module" src="el.js?v=20261027-15"></script>
+  <script type="module" src="compilado.js?v=20261027-15"></script>
 </head>
 <body>
 
@@ -170,6 +170,100 @@
               <table id="tabela"></table>
             </div>
             <div id="nota-tabela"></div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Lançamentos Mercado -->
+    <main id="pagina-lanc" class="pagina" hidden>
+      <div class="barra-seletores barra-lanc">
+        <div class="seletor"><span>Gráfico</span><div class="dropdown" id="dd-grafico-lanc"></div></div>
+        <div class="seletor"><span>Tabela</span><div class="dropdown" id="dd-tabela-lanc"></div></div>
+        <label>Considerar data de
+          <select id="lanc-data">
+            <option value="cad">Cadastro (Lancamento Apresentacao)</option>
+            <option value="venda">Primeiro mês com venda</option>
+          </select>
+        </label>
+        <label>Nível
+          <select id="lanc-nivel">
+            <option value="apres">Apresentação</option>
+            <option value="marca">Produto/Marca</option>
+          </select>
+        </label>
+        <span class="lanc-faixa">Lançados desde
+          <select id="lanc-ini"></select> até <select id="lanc-fim"></select>
+        </span>
+        <label>Eixo do tempo
+          <select id="lanc-eixo">
+            <option value="alinhado">Mesmo ponto de partida</option>
+            <option value="calendario">Calendário</option>
+          </select>
+        </label>
+        <label>Horizonte
+          <select id="lanc-horizonte">
+            <option value="12">12 meses</option>
+            <option value="24">24 meses</option>
+            <option value="36">36 meses</option>
+          </select>
+        </label>
+        <label>Acumulado
+          <select id="lanc-acum">
+            <option value="mensal">Mensal</option>
+            <option value="acum">Acumulado</option>
+          </select>
+        </label>
+        <label>Tipo de gráfico
+          <select id="lanc-tipo">
+            <option value="linhas">Linhas</option>
+            <option value="empilhado">Barras empilhadas</option>
+            <option value="cem">Barras empilhadas 100%</option>
+            <option value="agrupado">Barras agrupadas</option>
+            <option value="areas">Áreas empilhadas</option>
+            <option value="waterfall">Waterfall</option>
+          </select>
+        </label>
+        <label class="caixa-clara"><input type="checkbox" id="lanc-media"> Mostrar média dos lançamentos</label>
+      </div>
+
+      <div class="layout-analise">
+        <aside class="coluna-kpis">
+          <div id="kpis-lanc"></div>
+          <div class="exibicao">
+            <div class="exibicao-titulo">Exibição</div>
+            <label>Top N <input type="number" id="lanc-topn" min="1" step="1" placeholder="tudo"></label>
+            <label class="caixa"><input type="checkbox" id="lanc-outros"> Agrupar o restante como Outros</label>
+            <label class="caixa"><input type="checkbox" id="lanc-80"> Aglutinar automaticamente (80% RCD)</label>
+          </div>
+        </aside>
+        <div class="area-principal">
+          <div class="graficos">
+            <div class="card-grafico">
+              <h3 class="cab-rcd">RCD</h3>
+              <div class="grafico" id="grafico-lanc-rcd"></div>
+            </div>
+            <div class="card-grafico">
+              <h3 class="cab-und">UND</h3>
+              <div class="grafico" id="grafico-lanc-und"></div>
+            </div>
+            <div class="card-legenda">
+              <h3>Legenda</h3>
+              <div id="legenda-lanc"></div>
+            </div>
+          </div>
+          <div id="nota-grafico-lanc"></div>
+          <div class="card-tabela">
+            <div class="barra-tabela">
+              <button class="botao-pequeno" id="btn-expandir-lanc">+ Expandir tudo</button>
+              <button class="botao-pequeno" id="btn-recolher-lanc">− Recolher tudo</button>
+              <button class="botao-pequeno botao-limpar" id="btn-limpar-selecao-lanc" hidden>✕ Limpar seleção</button>
+              <span id="dica-selecao-lanc"></span>
+            </div>
+            <div class="tabela-rolagem">
+              <table id="tabela-lanc"></table>
+            </div>
+            <div id="nota-tabela-lanc"></div>
           </div>
         </div>
       </div>

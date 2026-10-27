@@ -21,6 +21,17 @@ O único arquivo de dados aqui é `exemplo.csv`, com 200 linhas **fictícias**
 3. Na aba **Filtros**, marque o que quiser analisar. Os filtros valem para todas as abas.
 4. Na aba **Gráfico e Tabela**, escolha a dimensão do gráfico, da tabela e o período (MAT ou YTD).
 
+## Lançamentos Mercado
+
+A página **Lançamentos Mercado** mostra só os produtos lançados no período escolhido em
+"Lançados desde" (padrão: últimos 36 meses da base), respeitando os filtros da página Filtros.
+A data de lançamento vem da coluna `Lancamento Apresentacao` (data do Excel, ex.: 45778 = 01/05/2025)
+ou do primeiro mês com unidades vendidas. No nível "Produto/Marca", a marca é lançada no mês da sua
+primeira apresentação. O eixo pode ser o calendário ou "Mesmo ponto de partida" (Mês 1 = mês de
+lançamento de cada produto). Com "Incluir ELs e MAT+1" ligado, as ELs também entram como lançamentos.
+
+O `exemplo.csv` tem 13 apresentações (10 marcas) com lançamentos fictícios entre out-23 e jun-26.
+
 ## Correção de preço (Infoprice)
 
 Na página **Filtros**, a seção "Correção de preço (Infoprice)" aceita um ou mais CSVs do Infoprice

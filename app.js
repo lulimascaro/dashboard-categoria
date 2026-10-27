@@ -271,6 +271,9 @@ async function carregarArquivo(arquivo) {
     const colApres = achar('Apresentacao Desc Longa');
     const colChave = colSku || colApres;
     selects.push(colChave ? `TRIM(${sqlColuna(colChave)}) AS sku` : `'-' AS sku`);
+    // mês de lançamento (cadastro) da apresentação, como índice de mês (ano × 12 + mês − 1)
+    const colLanc = achar('Lancamento Apresentacao');
+    selects.push(colLanc ? `${exprMesLancamento(sqlColuna(colLanc))} AS lanc_cad` : 'CAST(NULL AS INTEGER) AS lanc_cad');
 
     // Medidas: RCD, Unidades e Doses (Unidades x Quantidade Num) por período
     const med = `upper(trim(${sqlColuna(achar(COL_MEDIDA))}))`;
@@ -350,6 +353,16 @@ async function carregarArquivo(arquivo) {
   }
 }
 
+// Data de lançamento: número de série do Excel (45778 = 01/05/2025), ano (2017) ou texto dd/mm/aaaa / aaaa-mm-dd
+function exprMesLancamento(col) {
+  const data = `COALESCE(
+    CASE WHEN num(${col}) BETWEEN 10000 AND 80000 THEN DATE '1899-12-30' + CAST(floor(num(${col})) AS INTEGER) END,
+    CASE WHEN num(${col}) BETWEEN 1900 AND 2100 THEN make_date(CAST(num(${col}) AS INTEGER), 1, 1) END,
+    CAST(try_strptime(trim(${col}), '%d/%m/%Y') AS DATE),
+    CAST(try_strptime(trim(${col}), '%Y-%m-%d') AS DATE))`;
+  return `CAST(year(${data}) * 12 + month(${data}) - 1 AS INTEGER)`;
+}
+
 function rotuloMes(m) { return `${NOME_MES[m.mes - 1]}-${String(m.ano).slice(2)}`; }
 
 // ---------------------------------------------------------------------
@@ -410,6 +423,7 @@ function prepararInterface() {
   estado.expandidos = new Set();
   estado.ordem = { col: 'r0', desc: true };
   renderizarSeletores();
+  prepararLanc();
   prepararPreco();
   prepararPreco2();
   prepararPreco3();
@@ -547,6 +561,8 @@ async function atualizarTudo() {
   estado.analisePendente = true;
   estado.precoPendente = true;
   if (estado.pagina === 'analise') await atualizarAnalise();
+  estado.lancPendente = true;
+  if (estado.pagina === 'lanc') await atualizarLanc();
   if (estado.pagina === 'preco') await atualizarPreco();
   estado.preco2Pendente = true;
   if (estado.pagina === 'preco2') await atualizarPreco2();
@@ -595,7 +611,7 @@ function renderizarSeletores() {
   if (!estado.meses.length && $('sel-tempo').value === 'MES') $('sel-tempo').value = 'MAT';
 }
 
-function montarSuspenso(id, lista, opcoes, aoMudar) {
+function montarSuspenso(id, lista, opcoes, aoMudar, rotulo = rotuloDim) {
   const el = $(id);
   el.innerHTML = `
     <button type="button" class="dd-botao"><span class="dd-texto"></span><span class="dd-seta">▾</span></button>
@@ -613,15 +629,15 @@ function montarSuspenso(id, lista, opcoes, aoMudar) {
 
   const desenhar = () => {
     el.querySelector('.dd-texto').textContent = lista.length === 0 ? '(nenhum)'
-      : lista.length === 1 ? rotuloDim(lista[0]) : 'Seleções múltiplas';
+      : lista.length === 1 ? rotulo(lista[0]) : 'Seleções múltiplas';
     limpar.disabled = lista.length === 0;
     const texto = normalizar(busca.value);
     listaEl.innerHTML = opcoes
-      .filter((k) => !texto || normalizar(rotuloDim(k)).includes(texto))
+      .filter((k) => !texto || normalizar(rotulo(k)).includes(texto))
       .map((k) => {
         const pos = lista.indexOf(k);
         return `<div class="dd-item${pos >= 0 ? ' marcado' : ''}" data-k="${k}">
-          <span class="dd-caixa"></span><span class="dd-nome">${escaparHtml(rotuloDim(k))}</span>
+          <span class="dd-caixa"></span><span class="dd-nome">${escaparHtml(rotulo(k))}</span>
           <span class="dd-ordem">${pos >= 0 ? pos + 1 : ''}</span></div>`;
       }).join('') || '<div class="dd-vazio">Nada encontrado</div>';
   };
@@ -667,8 +683,8 @@ document.addEventListener('mousedown', (e) => {
 // Recebe itens com .r0 (RCD do período atual) e devolve quais ficam,
 // quais vão para "Outros" e quantos ficam escondidos.
 // ---------------------------------------------------------------------
-function aplicarExibicao(itens) {
-  const { topN, outros, auto80 } = estado.exib;
+function aplicarExibicao(itens, exib = estado.exib) {
+  const { topN, outros, auto80 } = exib;
   const ordenados = [...itens].sort((a, b) => (b.r0 || 0) - (a.r0 || 0));
   let n = ordenados.length;
   let agrupar = false;
@@ -732,6 +748,7 @@ async function trocarPagina(pagina) {
   marcarMenu(pagina);
   $('pagina-filtros').hidden = pagina !== 'filtros';
   $('pagina-analise').hidden = pagina !== 'analise';
+  $('pagina-lanc').hidden = pagina !== 'lanc';
   $('pagina-preco').hidden = pagina !== 'preco';
   $('pagina-preco2').hidden = pagina !== 'preco2';
   $('pagina-preco3').hidden = pagina !== 'preco3';
@@ -741,6 +758,10 @@ async function trocarPagina(pagina) {
   if (pagina === 'analise') {
     if (estado.analisePendente) atualizarAnalise();
     else Object.values(estado.graficos).forEach((g) => g.resize());
+  }
+  if (pagina === 'lanc') {
+    if (estado.lancPendente) atualizarLanc();
+    else desenharLancTudo();
   }
   if (pagina === 'preco') {
     if (estado.precoPendente) atualizarPreco();
@@ -881,7 +902,7 @@ function desenharLegenda(grupos, estatica = false) {
 
 function alternarSerie(nome) {
   if (estado.ocultas.has(nome)) estado.ocultas.delete(nome); else estado.ocultas.add(nome);
-  for (const g of Object.values(estado.graficos)) g.dispatchAction({ type: 'legendToggleSelect', name: nome });
+  for (const id of ['grafico-rcd', 'grafico-und']) if (estado.graficos[id]) estado.graficos[id].dispatchAction({ type: 'legendToggleSelect', name: nome });
   document.querySelectorAll('#legenda .leg-item').forEach((el) => {
     el.classList.toggle('oculta', estado.ocultas.has($('legenda')._grupos[Number(el.dataset.i)].nome));
   });
@@ -981,14 +1002,20 @@ function pontosChave(valores) {
   return new Set([0, valores.length - 1, iMax, iMin]);
 }
 
-function desenharGrafico(id, grupos, prefixo, per, totalGeral, tipo) {
+// opcoes: ocultas (séries escondidas), nulos (linhas interrompidas onde não há dado),
+// rotulos (false = sem rótulos nas linhas), extras (séries adicionais, ex.: média)
+function desenharGrafico(id, grupos, prefixo, per, totalGeral, tipo, opcoes = {}) {
+  const ocultas = opcoes.ocultas || estado.ocultas;
   const el = $(id);
   if (!estado.graficos[id]) estado.graficos[id] = echarts.init(el);
   const grafico = estado.graficos[id];
   const n = per.colunas.length;
   const mes = per.mes;
 
-  const valores = grupos.map((g) => per.colunas.map((_, i) => g.linha[prefixo + i] || 0));
+  const valores = grupos.map((g) => per.colunas.map((_, i) => {
+    const v = g.linha[prefixo + i];
+    return opcoes.nulos && tipo === 'linhas' && !valido(v) ? null : v || 0;
+  }));
   const totais = per.colunas.map((_, i) => totalGeral[prefixo + i] || 0);
   const empilhado = tipo === 'empilhado' || tipo === 'cem' || tipo === 'areas';
   const cem = tipo === 'cem';
@@ -1034,7 +1061,7 @@ function desenharGrafico(id, grupos, prefixo, per, totalGeral, tipo) {
       serie.data = dados.map((v) => ({ value: v, bruto: v }));
       serie.label = { show: mostrar, position: 'top', color: '#2B2B2B', fontSize: 9, formatter: (p) => abreviar(p.value) };
     } else if (tipo === 'linhas') {
-      serie.data = dados.map((v, i) => ({ value: v, bruto: v, label: { show: !mes || chave.has(i) } }));
+      serie.data = dados.map((v, i) => ({ value: v, bruto: v, label: { show: opcoes.rotulos !== false && (!mes || chave.has(i)) } }));
       serie.label = { position: 'top', color: '#2B2B2B', fontSize: 9, formatter: (p) => abreviar(p.value) };
     } else { // áreas: os rótulos ficam só no total
       serie.data = dados.map((v) => ({ value: v, bruto: v }));
@@ -1043,12 +1070,14 @@ function desenharGrafico(id, grupos, prefixo, per, totalGeral, tipo) {
   });
 
   // períodos projetados (MAT+1): mais claros e hachurados
-  if (per.projetado.size) {
-    for (const s of series) {
-      s.data = s.data.map((d, i) => (per.projetado.has(i)
+  if (per.projetado.size || grupos.some((g) => g.proj && g.proj.size)) {
+    series.forEach((s, k) => {
+      const proj = grupos[k].proj;
+      s.data = s.data.map((d, i) => (per.projetado.has(i) || (proj && proj.has(i))
         ? { ...d, itemStyle: { opacity: 0.55, decal: HACHURA }, symbol: 'emptyCircle' } : d));
-    }
+    });
   }
+  if (opcoes.extras) series.push(...opcoes.extras);
 
   // total escrito acima das barras/áreas empilhadas (série invisível)
   if (empilhado) {
@@ -1087,7 +1116,7 @@ function desenharGrafico(id, grupos, prefixo, per, totalGeral, tipo) {
     legend: {
       show: false,
       data: grupos.map((g) => g.nome),
-      selected: Object.fromEntries(grupos.map((g) => [g.nome, !estado.ocultas.has(g.nome)])),
+      selected: Object.fromEntries(grupos.map((g) => [g.nome, !ocultas.has(g.nome)])),
     },
     grid: { left: 50, right: mes ? 20 : 15, top: mes ? 50 : 30, bottom: mes ? 50 : 30 },
     labelLayout: mes ? { hideOverlap: true } : undefined,
@@ -2637,7 +2666,7 @@ async function aplicarInfoprice() {
     }
   }
   // todas as páginas recalculam com o RC novo
-  estado.analisePendente = estado.precoPendente = estado.preco2Pendente = estado.preco3Pendente = true;
+  estado.analisePendente = estado.lancPendente = estado.precoPendente = estado.preco2Pendente = estado.preco3Pendente = true;
   desenharResumoIP();
 }
 
@@ -2891,7 +2920,7 @@ async function calcularSugestaoProj() {
 async function aposMudancaEL(reconstruir) {
   if (!estado.conn) return;
   if (reconstruir) await reconstruirEL();
-  estado.analisePendente = estado.precoPendente = estado.preco2Pendente = estado.preco3Pendente = true;
+  estado.analisePendente = estado.lancPendente = estado.precoPendente = estado.preco2Pendente = estado.preco3Pendente = true;
   await atualizarTudo();
 }
 
@@ -2961,6 +2990,607 @@ function estiloProj(projetado) {
 }
 
 // =====================================================================
+// Lançamentos Mercado: só os produtos lançados no período escolhido,
+// com eixo em calendário ou alinhado no mês de lançamento (Mês 1).
+// Respeita os filtros da página Filtros. Com "Incluir ELs e MAT+1"
+// ligado, as ELs também são lançamentos (Mês 1 da EL = mês de lançamento).
+// =====================================================================
+const LANC = '__lanc'; // dimensão "Lançamento" (apresentação ou marca, conforme o Nível)
+const CAMPOS_LANC = ['rA', 'uA', 'pfA', 'rcA', 'r12', 'u12', 'mat0'];
+const COR_MEDIA = '#000000';
+estado.lanc = {
+  dimsGrafico: [LANC], dimsTabela: [LANC], expandidos: new Set(), selecao: new Map(), ocultas: new Set(),
+  ordem: { col: 'rA', desc: true }, exib: { topN: null, outros: false, auto80: false },
+  dados: null, calc: null, tabela: null, linhas: [],
+};
+estado.lancPendente = true;
+
+const rotuloDimLanc = (k) => (k === LANC ? 'Lançamento' : rotuloDim(k));
+const valorLanc = (it, k) => (k === LANC ? it.unidade : it.d[k]);
+// rótulo de um mês da linha do tempo (meses projetados do MAT+1 com *)
+function rotuloTempo(t) {
+  const N = estado.meses.length;
+  if (t < N) return t >= 0 ? estado.meses[t] : '-';
+  const p = rotulosProjetados()[t - N];
+  return p ? p + '*' : '-';
+}
+
+function prepararLanc() {
+  const L = estado.lanc;
+  L.dimsGrafico = [LANC];
+  L.dimsTabela = [LANC];
+  L.expandidos = new Set();
+  L.selecao = new Map();
+  L.ocultas = new Set();
+  L.ordem = { col: 'rA', desc: true };
+  const opcoes = estado.meses.map((m, i) => `<option value="${i}">${m}</option>`).join('');
+  $('lanc-ini').innerHTML = opcoes;
+  $('lanc-fim').innerHTML = opcoes;
+  const N = estado.meses.length;
+  $('lanc-ini').value = String(Math.max(0, N - 36)); // padrão: últimos 36 meses da base
+  $('lanc-fim').value = String(Math.max(0, N - 1));
+  renderizarSeletoresLanc();
+}
+
+function renderizarSeletoresLanc() {
+  const L = estado.lanc;
+  const base = estado.dims.map((d) => d.key);
+  montarSuspenso('dd-grafico-lanc', L.dimsGrafico, [LANC, ...base], desenharGraficosLanc, rotuloDimLanc);
+  montarSuspenso('dd-tabela-lanc', L.dimsTabela, [LANC, ...base, PRODUTO_CORP], () => {
+    L.expandidos = new Set();
+    const tinha = L.selecao.size > 0;
+    L.selecao.clear();
+    montarTabelaLanc();
+    if (tinha) { atualizarKpisLanc(); desenharGraficosLanc(); }
+  }, rotuloDimLanc);
+}
+
+// Busca na base os SKUs lançados no período (com os valores de todos os meses)
+async function atualizarLanc() {
+  estado.lancPendente = false;
+  const L = estado.lanc;
+  L.selecao.clear();
+  const N = estado.meses.length;
+  if (!N) {
+    L.dados = null;
+    $('nota-tabela-lanc').textContent = 'A base não tem colunas mensais: não dá para identificar lançamentos.';
+    return;
+  }
+  const NT = N + (elLigado() ? 12 : 0); // com as ELs ligadas, a linha do tempo inclui os 12 meses do MAT+1
+  const idx0 = estado.mesesObj[0].indice;
+  const janela = indicesJanela('MAT', 0);
+  const mesEL = janela.length ? janela[0] : Math.max(0, N - 12);
+  let ini = Number($('lanc-ini').value) || 0;
+  let fim = Number($('lanc-fim').value);
+  if (!Number.isFinite(fim)) fim = N - 1;
+  if (ini > fim) { fim = ini; $('lanc-fim').value = String(fim); }
+  // mês de lançamento de cada SKU: cadastro ou primeiro mês com unidades > 0
+  // (vendendo já no 1º mês da base = lançado antes da base: −1, fica fora do período)
+  const lancSku = $('lanc-data').value === 'venda'
+    ? `COALESCE(${estado.meses.map((_, i) => `CASE WHEN und_m${i} > 0 THEN ${i || -1} END`).join(', ')})`
+    : `lanc_cad - ${idx0}`;
+  const unidade = $('lanc-nivel').value === 'marca' ? `(d_produto || ' (' || sigla || ')')` : 'd_apres';
+  const dims = estado.dims.map((d) => `d_${d.key} AS "k_${d.key}"`);
+  dims.push(`(d_produto || ' (' || sigla || ')') AS "k_${PRODUTO_CORP}"`);
+  const valores = [];
+  const mercado = [];
+  for (let t = 0; t < NT; t++) {
+    const c = t < N ? `m${t}` : `p${t - N}`;
+    for (const m of ['rcd', 'und', 'pf', 'rc']) valores.push(`${colExpr(m, c)} AS ${m}_${t}`);
+    mercado.push(`SUM(${colExpr('und', c)}) AS u_${t}`);
+  }
+  const where = clausulaWhere(null);
+  const [linhas, [merc]] = await Promise.all([
+    consultar(`WITH b AS (
+        SELECT *, CASE WHEN is_el THEN ${mesEL} ELSE ${lancSku} END AS l_sku, ${unidade} AS unidade FROM fato ${where}
+      ), u AS (SELECT *, min(l_sku) OVER (PARTITION BY unidade) AS l_lanc FROM b)
+      SELECT unidade, l_lanc, is_el, COALESCE(rcd_MAT0, 0) AS mat0, ${dims.join(', ')}, ${valores.join(', ')}
+      FROM u WHERE l_lanc BETWEEN ${ini} AND ${fim}`),
+    consultar(`SELECT SUM(rcd_MAT0) AS rmat, ${mercado.join(', ')} FROM fato ${where}`),
+  ]);
+  const chaves = [...estado.dims.map((d) => d.key), PRODUTO_CORP];
+  const itens = linhas.map((l) => {
+    const it = { unidade: l.unidade, L: l.l_lanc, el: !!l.is_el, mat0: l.mat0, d: {}, r: [], u: [], p: [], c: [] };
+    for (const k of chaves) it.d[k] = l['k_' + k];
+    for (let t = 0; t < NT; t++) {
+      it.r.push(l['rcd_' + t] || 0); it.u.push(l['und_' + t] || 0);
+      it.p.push(l['pf_' + t] || 0); it.c.push(l['rc_' + t] || 0);
+    }
+    return it;
+  });
+  L.dados = { itens, N, NT, mercadoU: Array.from({ length: NT }, (_, t) => merc['u_' + t] || 0), rmat: merc.rmat };
+  calcularLanc();
+  desenharLancTudo();
+}
+
+// Eixo e métricas no horizonte (sem consultar a base de novo)
+function calcularLanc() {
+  const L = estado.lanc;
+  if (!L.dados) { L.calc = null; return; }
+  const { itens, N, NT } = L.dados;
+  const H = Number($('lanc-horizonte').value) || 12;
+  const alinhado = $('lanc-eixo').value === 'alinhado';
+  const inicio = itens.length ? Math.min(...itens.map((it) => it.L)) : 0; // Calendário: lançamento mais antigo
+  const posicoes = alinhado ? H : Math.max(0, Math.min(H, NT - inicio));
+  const rotulos = Array.from({ length: posicoes }, (_, k) => (alinhado ? `Mês ${k + 1}` : rotuloTempo(inicio + k)));
+  const tempo = (it, k) => (alinhado ? it.L + k : inicio + k); // mês da base na posição k do eixo
+  for (const it of itens) {
+    // SKUs reais param no último mês da base; as ELs seguem pelos 12 meses do MAT+1
+    const fimDados = it.el ? NT : N;
+    it.pos = []; // posição do eixo -> mês da base (null = sem dado: antes do lançamento ou depois da base)
+    let mesesH = 0;
+    for (const c of ['rA', 'uA', 'pfA', 'rcA']) it[c] = 0;
+    for (let k = 0; k < posicoes; k++) {
+      const t = tempo(it, k);
+      const ok = t >= it.L && t < fimDados;
+      it.pos.push(ok ? t : null);
+      if (!ok) continue;
+      mesesH++;
+      it.rA += it.r[t]; it.uA += it.u[t]; it.pfA += it.p[t]; it.rcA += it.c[t];
+    }
+    const t12 = it.L + 11;
+    it.t12 = t12 < fimDados ? t12 : null;
+    it.r12 = it.t12 !== null ? it.r[t12] : 0;
+    it.u12 = it.t12 !== null ? it.u[t12] : 0;
+    it.info = { L: it.L, mesesH, t12: it.t12 };
+  }
+  const projetado = new Set();
+  if (!alinhado) for (let k = 0; k < posicoes; k++) if (inicio + k >= N) projetado.add(k);
+  L.calc = { H, alinhado, inicio, posicoes, rotulos, projetado };
+}
+
+function itensSelecionadosLanc() {
+  const L = estado.lanc;
+  if (!L.dados) return [];
+  if (!L.selecao.size) return L.dados.itens;
+  const conds = [...L.selecao.values()];
+  return L.dados.itens.filter((it) => conds.some((f) => f(it)));
+}
+
+function desenharLancTudo() {
+  if (!estado.lanc.dados) return;
+  atualizarKpisLanc();
+  desenharGraficosLanc();
+  montarTabelaLanc();
+}
+
+// ----- KPIs -----
+function atualizarKpisLanc() {
+  const L = estado.lanc;
+  if (!L.calc) return;
+  const itens = itensSelecionadosLanc();
+  const unidades = new Map();
+  let rA = 0, uA = 0, mat = 0, u12 = 0;
+  for (const it of itens) {
+    unidades.set(it.unidade, it.info);
+    rA += it.rA; uA += it.uA; mat += it.mat0; u12 += it.u12;
+  }
+  const com12 = [...unidades.values()].filter((i) => i.t12 !== null).length;
+  const H = L.calc.H;
+  const cards = [
+    ['kpi-cont', 'Nº de lançamentos', inteiro(unidades.size)],
+    ['kpi-rcd', `RCD acumulado (${H} meses)`, abreviar(rA)],
+    ['kpi-und', `UND acumulado (${H} meses)`, abreviar(uA)],
+    ['kpi-rcd', 'Lançamentos no RCD MAT do mercado', percentual(divisao(mat, L.dados.rmat))],
+    ['kpi-und', 'Média de UND no Mês 12 por lançamento',
+      `${com12 ? abreviar(u12 / com12) : '-'} <small>${com12} de ${unidades.size} com 12 meses</small>`],
+  ];
+  $('kpis-lanc').innerHTML = cards.map(([cls, rotulo, valor]) =>
+    `<div class="kpi ${cls}"><div class="kpi-rotulo">${rotulo}</div><div class="kpi-valor">${valor}</div></div>`).join('');
+}
+
+// ----- Gráficos -----
+// soma os valores de vários itens em cada posição do eixo (null onde nenhum tem dado)
+function somarPosicoes(itens, campo, n) {
+  const v = new Array(n).fill(null);
+  for (const it of itens) {
+    it.pos.forEach((t, k) => { if (t !== null) v[k] = (v[k] || 0) + it[campo][t]; });
+  }
+  return v;
+}
+function acumular(v) {
+  let s = 0;
+  return v.map((x) => (x === null ? null : (s += x)));
+}
+
+function desenharGraficosLanc() {
+  const L = estado.lanc;
+  if (!L.calc) return;
+  const { posicoes, rotulos, projetado, alinhado } = L.calc;
+  const { N } = L.dados;
+  const acum = $('lanc-acum').value === 'acum';
+  const tipo = $('lanc-tipo').value;
+  const itens = itensSelecionadosLanc();
+  const dims = L.dimsGrafico;
+
+  // um grupo por combinação das dimensões do "Gráfico" (padrão: um por lançamento)
+  const porGrupo = new Map();
+  for (const it of itens) {
+    const g = dims.length ? dims.map((k) => valorLanc(it, k)).join(' | ') : 'Total';
+    if (!porGrupo.has(g)) porGrupo.set(g, []);
+    porGrupo.get(g).push(it);
+  }
+  const montar = (nome, lista) => {
+    const linha = { g: nome, el: lista.some((it) => it.el), r0: lista.reduce((s, it) => s + it.rA, 0) };
+    let r = somarPosicoes(lista, 'r', posicoes);
+    let u = somarPosicoes(lista, 'u', posicoes);
+    if (acum) { r = acumular(r); u = acumular(u); }
+    r.forEach((v, k) => { linha['r_' + k] = v; linha['u_' + k] = u[k]; });
+    // no eixo alinhado, cada lançamento chega ao MAT+1 projetado num ponto diferente
+    const proj = new Set();
+    if (alinhado) for (const it of lista) it.pos.forEach((t, k) => { if (t !== null && t >= N) proj.add(k); });
+    return { linha, proj, lista };
+  };
+  const todos = [...porGrupo].map(([nome, lista]) => montar(nome, lista));
+  const regra = aplicarExibicao(todos.map((x) => Object.assign(x.linha, { _x: x })), L.exib);
+  let manter = regra.manter.map((l) => l._x);
+  let outros = regra.outros.map((l) => l._x);
+  let nota = regra.escondidos ? `${inteiro(regra.escondidos)} itens fora do Top N não aparecem.` : '';
+  if (manter.length > MAX_SERIES) {
+    outros = [...manter.slice(MAX_SERIES), ...outros];
+    manter = manter.slice(0, MAX_SERIES);
+    nota = `Mostrando os ${MAX_SERIES} maiores; os demais estão em "Outros".`;
+  }
+  const grupos = manter.map((x, i) => ({ nome: x.linha.g, linha: x.linha, cor: CORES[i % CORES.length], proj: x.proj }));
+  if (outros.length) {
+    const o = montar('Outros', outros.flatMap((x) => x.lista));
+    grupos.push({ nome: 'Outros', linha: o.linha, cor: COR_OUTROS, proj: o.proj });
+  }
+  const totalGeral = {};
+  for (let k = 0; k < posicoes; k++) {
+    totalGeral['r_' + k] = todos.reduce((s, x) => s + (x.linha['r_' + k] || 0), 0);
+    totalGeral['u_' + k] = todos.reduce((s, x) => s + (x.linha['u_' + k] || 0), 0);
+  }
+  const per = { mes: true, rotulos, colunas: rotulos.map((_, k) => k), projetado, atual: posicoes - 1 };
+
+  if (tipo === 'waterfall') {
+    const n = L.exib.topN || 5;
+    const linhas = todos.map((x) => x.linha);
+    desenharWaterfall('grafico-lanc-rcd', linhas, 'r_', per, n);
+    desenharWaterfall('grafico-lanc-und', linhas, 'u_', per, n);
+    desenharLegendaLanc([
+      { nome: 'Total', cor: WF.total }, { nome: 'Aumento', cor: WF.aumento },
+      { nome: 'Queda', cor: WF.queda }, { nome: 'Outros', cor: WF.outros },
+    ], false, true);
+    $('nota-grafico-lanc').textContent = `Waterfall: do primeiro ao último ponto do eixo, os ${n} itens de maior variação; o restante está em "Outros".`;
+    return;
+  }
+
+  // média por lançamento em cada ponto do eixo (só os lançamentos que já têm aquele mês)
+  const comMedia = $('lanc-media').checked && tipo !== 'cem';
+  const extras = (campo) => {
+    if (!comMedia) return [];
+    const porUnidade = new Map();
+    for (const it of itens) {
+      if (!porUnidade.has(it.unidade)) porUnidade.set(it.unidade, []);
+      porUnidade.get(it.unidade).push(it);
+    }
+    const soma = new Array(posicoes).fill(0);
+    const qtd = new Array(posicoes).fill(0);
+    for (const lista of porUnidade.values()) {
+      let v = somarPosicoes(lista, campo, posicoes);
+      if (acum) v = acumular(v);
+      v.forEach((x, k) => { if (x !== null) { soma[k] += x; qtd[k]++; } });
+    }
+    return [{
+      name: 'Média dos lançamentos', type: 'line', z: 10, symbol: 'circle', symbolSize: 4,
+      itemStyle: { color: COR_MEDIA }, lineStyle: { color: COR_MEDIA, type: 'dashed', width: 2 },
+      label: { show: false },
+      data: soma.map((s, k) => (qtd[k] ? { value: s / qtd[k], bruto: s / qtd[k] } : null)),
+    }];
+  };
+  const opcoes = (campo) => ({ ocultas: L.ocultas, nulos: true, rotulos: grupos.length <= 4, extras: extras(campo) });
+  desenharGrafico('grafico-lanc-rcd', grupos, 'r_', per, totalGeral, tipo, opcoes('r'));
+  desenharGrafico('grafico-lanc-und', grupos, 'u_', per, totalGeral, tipo, opcoes('u'));
+  desenharLegendaLanc(grupos, comMedia);
+  if (!itens.length) nota = 'Nenhum lançamento no período escolhido (confira "Lançados desde" e os filtros).';
+  if (alinhado) nota += (nota ? ' ' : '') + 'Mês 1 = mês de lançamento. Linhas interrompidas: o lançamento ainda não tem esse mês.';
+  if (projetado.size || grupos.some((g) => g.proj.size)) nota += ' Pontos hachurados/vazados = meses projetados (MAT+1).';
+  if ($('lanc-media').checked && tipo === 'cem') nota += ' A média não aparece no gráfico 100%.';
+  $('nota-grafico-lanc').textContent = nota;
+}
+
+function desenharLegendaLanc(grupos, comMedia, estatica = false) {
+  const leg = $('legenda-lanc');
+  leg._grupos = grupos;
+  leg._estatica = estatica;
+  leg.innerHTML = grupos.map((g, i) =>
+    `<div class="leg-item${estatica ? ' estatica' : ''}${!estatica && estado.lanc.ocultas.has(g.nome) ? ' oculta' : ''}" data-i="${i}" title="${escaparHtml(g.nome)}">
+      <span class="leg-cor" style="background:${g.cor}"></span><span class="leg-nome">${escaparHtml(g.nome)}</span>${g.linha && g.linha.el ? '<span class="tag-el">EL</span>' : ''}
+    </div>`).join('')
+    + (comMedia ? '<div class="leg-item estatica"><span class="leg-media"></span><span class="leg-nome">Média dos lançamentos</span></div>' : '');
+}
+
+$('legenda-lanc').addEventListener('click', (e) => {
+  const leg = $('legenda-lanc');
+  const item = e.target.closest('.leg-item[data-i]');
+  if (!item || leg._estatica) return;
+  const nome = leg._grupos[Number(item.dataset.i)].nome;
+  const ocultas = estado.lanc.ocultas;
+  if (ocultas.has(nome)) ocultas.delete(nome); else ocultas.add(nome);
+  for (const id of ['grafico-lanc-rcd', 'grafico-lanc-und']) {
+    if (estado.graficos[id]) estado.graficos[id].dispatchAction({ type: 'legendToggleSelect', name: nome });
+  }
+  item.classList.toggle('oculta', ocultas.has(nome));
+});
+
+// ----- Tabela (matriz) -----
+function noLanc(nome, nivel, caminho, valores) {
+  const no = { nome, nivel, caminho, valores, filhos: new Map(), unidades: new Map(), el: false };
+  for (const c of CAMPOS_LANC) no[c] = 0;
+  return no;
+}
+function somarNoLanc(no, it) {
+  for (const c of CAMPOS_LANC) no[c] += it[c] || 0;
+  no.unidades.set(it.unidade, it.info);
+  if (it.el) no.el = true;
+}
+function juntarNosLanc(destino, origem) {
+  for (const c of CAMPOS_LANC) destino[c] += origem[c] || 0;
+  origem.unidades.forEach((v, k) => destino.unidades.set(k, v));
+  if (origem.el) destino.el = true;
+}
+// Médias e Mês 12. MS% do Mês 12 = UND do lançamento ÷ UND do mercado filtrado naquele mês
+function completarNoLanc(no) {
+  const { N, mercadoU } = estado.lanc.dados;
+  let minL = Infinity, minMeses = Infinity, n12 = 0, mercado12 = 0;
+  for (const inf of no.unidades.values()) {
+    minL = Math.min(minL, inf.L);
+    minMeses = Math.min(minMeses, inf.mesesH);
+    if (inf.t12 !== null) { n12++; mercado12 += mercadoU[inf.t12] || 0; }
+  }
+  no.nLanc = no.unidades.size;
+  no.L = no.nLanc ? minL : null;
+  no.meses = no.nLanc ? N - minL : null;
+  no.mesesH = no.nLanc ? minMeses : null;
+  no.r12v = n12 ? no.r12 : null;
+  no.u12v = n12 ? no.u12 : null;
+  no.ms12 = n12 ? divisao(no.u12, mercado12) : null;
+  no.pfU = divisao(no.pfA, no.uA);
+  no.rcdU = divisao(no.rA, no.uA);
+  no.rcU = divisao(no.rcA, no.uA);
+  no.desc = no.pfA ? 1 - no.rA / no.pfA : null;
+  no.margem = no.rcA ? 1 - no.rA / no.rcA : null;
+  no.r0 = no.rA; // Top N / 80% pelo RCD acumulado no horizonte
+}
+
+const COLUNAS_LANC = (H) => [
+  { id: 'L', titulo: 'Data de lançamento', tipo: 'data' },
+  { id: 'meses', titulo: 'Meses desde o lançamento', tipo: 'int' },
+  { id: 'rA', titulo: `RCD acumulado (${H} meses)`, tipo: 'num', cor: '#6B76A6', meses: true },
+  { id: 'uA', titulo: `UND acumulado (${H} meses)`, tipo: 'num', cor: '#A58BDB', meses: true },
+  { id: 'r12v', titulo: 'RCD no Mês 12', tipo: 'num', cor: '#6B76A6' },
+  { id: 'u12v', titulo: 'UND no Mês 12', tipo: 'num', cor: '#A58BDB' },
+  { id: 'ms12', titulo: 'MS% UND no Mês 12', tipo: 'pct', cor: '#F2C94C' },
+  { id: 'pfU', titulo: 'PF/UND', tipo: 'rs' },
+  { id: 'rcdU', titulo: 'RCD/UND', tipo: 'rs' },
+  { id: 'rcU', titulo: 'RC/UND', tipo: 'rs' },
+  { id: 'desc', titulo: 'Desc. Com.', tipo: 'pct' },
+  { id: 'margem', titulo: 'Margem PDV', tipo: 'pct' },
+];
+
+// A tabela usa todos os lançamentos (não a própria seleção)
+function montarTabelaLanc() {
+  const L = estado.lanc;
+  if (!L.calc) return;
+  const dims = L.dimsTabela;
+  const raiz = noLanc('Total', -1, '', []);
+  for (const it of L.dados.itens) {
+    somarNoLanc(raiz, it);
+    let no = raiz;
+    dims.forEach((k, i) => {
+      const valor = valorLanc(it, k);
+      let filho = no.filhos.get(valor);
+      if (!filho) {
+        filho = noLanc(valor, i, no.caminho + SEP + valor, [...no.valores, valor]);
+        no.filhos.set(valor, filho);
+      }
+      somarNoLanc(filho, it);
+      no = filho;
+    });
+  }
+  const completarTudo = (no) => { completarNoLanc(no); no.filhos.forEach(completarTudo); };
+  completarTudo(raiz);
+  L.tabela = { raiz, dims: [...dims] };
+  desenharTabelaLanc();
+}
+
+function ordenarLanc(lista) {
+  const { col, desc } = estado.lanc.ordem;
+  return lista.sort((a, b) => {
+    if (col === 'nome') return (desc ? -1 : 1) * String(a.nome).localeCompare(String(b.nome), 'pt-BR');
+    const va = valido(a[col]) ? a[col] : -Infinity;
+    const vb = valido(b[col]) ? b[col] : -Infinity;
+    return desc ? vb - va : va - vb;
+  });
+}
+
+function filhosVisiveisLanc(no) {
+  const regra = aplicarExibicao([...no.filhos.values()], estado.lanc.exib);
+  const lista = ordenarLanc(regra.manter);
+  if (regra.outros.length) {
+    const outros = noLanc('Outros', no.nivel + 1, no.caminho + SEP + '__outros__', no.valores);
+    outros.ehOutros = true;
+    outros.membros = new Set(regra.outros.map((f) => f.nome));
+    for (const f of regra.outros) juntarNosLanc(outros, f);
+    completarNoLanc(outros);
+    lista.push(outros);
+  }
+  return { lista, escondidos: regra.escondidos };
+}
+
+// Filtro equivalente a uma linha da tabela (função aplicada a cada SKU lançado)
+function condicaoLinhaLanc(no, dims) {
+  const valores = [...no.valores];
+  const membros = no.ehOutros ? no.membros : null;
+  const nivel = no.nivel;
+  return (it) => valores.every((v, i) => valorLanc(it, dims[i]) === v)
+    && (!membros || membros.has(valorLanc(it, dims[nivel])));
+}
+
+function desenharTabelaLanc() {
+  const L = estado.lanc;
+  if (!L.tabela) return;
+  const { raiz, dims } = L.tabela;
+  const { H, alinhado } = L.calc;
+  const colunas = COLUNAS_LANC(H);
+  const { col, desc } = L.ordem;
+  const ultimoNivel = dims.length - 1;
+
+  const visiveis = [];
+  let escondidos = 0;
+  let cortou = false;
+  const percorrer = (no) => {
+    const { lista, escondidos: e } = filhosVisiveisLanc(no);
+    escondidos += e;
+    for (const f of lista) {
+      if (visiveis.length >= MAX_LINHAS_TABELA) { cortou = true; return; }
+      visiveis.push(f);
+      if (!f.ehOutros && f.nivel < ultimoNivel && L.expandidos.has(f.caminho)) percorrer(f);
+    }
+  };
+  if (dims.length) percorrer(raiz);
+
+  const maximos = {};
+  for (const l of visiveis) {
+    for (const c of colunas) {
+      if (!c.cor || l.ehOutros) continue;
+      const chave = c.id + '|' + l.nivel;
+      maximos[chave] = Math.max(maximos[chave] || 0, valido(l[c.id]) ? l[c.id] : 0);
+    }
+  }
+  const texto = (l, c) => {
+    const v = l[c.id];
+    if (c.tipo === 'data') return valido(v) ? `<span class="lanc-data">${rotuloTempo(v)}</span>` : '-';
+    if (c.tipo === 'int') return inteiro(v);
+    if (c.tipo === 'rs') return reais(v);
+    if (c.tipo === 'pct') return percentual(v);
+    let s = inteiro(v);
+    // eixo alinhado: lançamento que ainda não completou o horizonte
+    if (c.meses && alinhado && l.nLanc === 1 && l.mesesH < H) s += `<span class="cel-meses">(${l.mesesH} meses)</span>`;
+    return s;
+  };
+  const celula = (l, c, comBarra) => {
+    const v = l[c.id];
+    const max = maximos[c.id + '|' + l.nivel];
+    if (comBarra && c.cor && max > 0 && valido(v) && v > 0) {
+      const largura = Math.min(100, (v / max) * 100);
+      return `<td class="cel-barra"><div class="barra" style="width:${largura}%;background:${c.cor}"></div><span>${texto(l, c)}</span></td>`;
+    }
+    return `<td>${texto(l, c)}</td>`;
+  };
+
+  const seta = (id) => (col === id ? (desc ? ' ▼' : ' ▲') : '');
+  const titulo = dims.length ? dims.map(rotuloDimLanc).join(' › ') : '(sem dimensão)';
+  const cabecalho = `<thead><tr>
+      <th data-col="nome" class="${col === 'nome' ? 'ordenada' : ''}">${escaparHtml(titulo)}${seta('nome')}</th>
+      ${colunas.map((c) => `<th data-col="${c.id}" class="${col === c.id ? 'ordenada' : ''}">${c.titulo}${seta(c.id)}</th>`).join('')}
+    </tr></thead>`;
+
+  const haSelecao = L.selecao.size > 0;
+  const selecionada = (caminho) => [...L.selecao.keys()].some((c) => caminho === c || caminho.startsWith(c + SEP));
+  L.linhas = visiveis;
+  const corpo = '<tbody>' + visiveis.map((l, i) => {
+    const podeAbrir = !l.ehOutros && l.nivel < ultimoNivel;
+    const aberto = L.expandidos.has(l.caminho);
+    const botao = podeAbrir
+      ? `<button class="btn-exp" data-i="${i}" title="${aberto ? 'Recolher' : 'Expandir'}">${aberto ? '−' : '+'}</button>`
+      : '<span class="btn-exp-vazio"></span>';
+    const classes = [`nivel-${Math.min(l.nivel, 3)}`];
+    if (l.ehOutros) classes.push('linha-outros');
+    if (haSelecao) classes.push(L.selecao.has(l.caminho) ? 'selecionada' : selecionada(l.caminho) ? '' : 'apagada');
+    return `<tr class="${classes.join(' ')}" data-i="${i}">
+      <td style="padding-left:${8 + l.nivel * 20}px">${botao}${escaparHtml(l.nome)}${l.el ? '<span class="tag-el">EL</span>' : ''}</td>
+      ${colunas.map((c) => celula(l, c, true)).join('')}</tr>`;
+  }).join('') + '</tbody>';
+  const rodape = `<tfoot><tr><td>Total (${inteiro(raiz.nLanc)} lançamentos)</td>${colunas.map((c) => celula(raiz, c, false)).join('')}</tr></tfoot>`;
+
+  $('tabela-lanc').innerHTML = cabecalho + corpo + rodape;
+  $('btn-expandir-lanc').hidden = $('btn-recolher-lanc').hidden = dims.length < 2;
+  $('btn-limpar-selecao-lanc').hidden = !haSelecao;
+  $('dica-selecao-lanc').textContent = haSelecao
+    ? `${L.selecao.size} ${L.selecao.size > 1 ? 'linhas selecionadas filtram' : 'linha selecionada filtra'} os gráficos e os cards.`
+    : 'Clique em uma linha para filtrar os gráficos (Ctrl+clique para várias).';
+  const notas = [];
+  if (!raiz.nLanc) notas.push('Nenhum lançamento no período escolhido.');
+  if (cortou) notas.push(`Mostrando as primeiras ${inteiro(MAX_LINHAS_TABELA)} linhas.`);
+  if (escondidos) notas.push(`${inteiro(escondidos)} linhas fora do Top N não aparecem.`);
+  notas.push(alinhado
+    ? `Acumulados e preços médios: do Mês 1 ao Mês ${H} de cada lançamento.`
+    : `Acumulados e preços médios: de ${rotuloTempo(L.calc.inicio)} até ${rotuloTempo(L.calc.inicio + L.calc.posicoes - 1)} (calendário).`);
+  notas.push('MS% UND no Mês 12 = sobre o mercado filtrado naquele mês.');
+  $('nota-tabela-lanc').textContent = notas.join(' ');
+}
+
+function clicarLinhaLanc(linha, acumularSel) {
+  const L = estado.lanc;
+  const { caminho } = linha;
+  const cond = condicaoLinhaLanc(linha, L.tabela.dims);
+  if (acumularSel) {
+    if (L.selecao.has(caminho)) L.selecao.delete(caminho);
+    else L.selecao.set(caminho, cond);
+  } else if (L.selecao.has(caminho) && L.selecao.size === 1) {
+    L.selecao.clear();
+  } else {
+    L.selecao = new Map([[caminho, cond]]);
+  }
+  aplicarSelecaoLanc();
+}
+function aplicarSelecaoLanc() {
+  desenharTabelaLanc();
+  atualizarKpisLanc();
+  desenharGraficosLanc();
+}
+
+function lerExibicaoLanc() {
+  const n = parseInt($('lanc-topn').value, 10);
+  const auto80 = $('lanc-80').checked;
+  estado.lanc.exib = { topN: Number.isFinite(n) && n > 0 ? n : null, outros: $('lanc-outros').checked, auto80 };
+  $('lanc-topn').disabled = auto80;
+  $('lanc-outros').disabled = auto80;
+  if (estado.lanc.selecao.size) estado.lanc.selecao.clear();
+  desenharLancTudo();
+}
+
+// ligações dos controles
+['lanc-data', 'lanc-nivel', 'lanc-ini', 'lanc-fim'].forEach((id) => $(id).addEventListener('change', atualizarLanc));
+['lanc-eixo', 'lanc-horizonte'].forEach((id) => $(id).addEventListener('change', () => { calcularLanc(); desenharLancTudo(); }));
+['lanc-acum', 'lanc-tipo', 'lanc-media'].forEach((id) => $(id).addEventListener('change', desenharGraficosLanc));
+$('lanc-topn').addEventListener('input', lerExibicaoLanc);
+$('lanc-outros').addEventListener('change', lerExibicaoLanc);
+$('lanc-80').addEventListener('change', lerExibicaoLanc);
+$('btn-expandir-lanc').addEventListener('click', () => {
+  const L = estado.lanc;
+  if (!L.tabela) return;
+  const abrir = (no) => no.filhos.forEach((f) => {
+    if (f.nivel < L.tabela.dims.length - 1) { L.expandidos.add(f.caminho); abrir(f); }
+  });
+  abrir(L.tabela.raiz);
+  desenharTabelaLanc();
+});
+$('btn-recolher-lanc').addEventListener('click', () => { estado.lanc.expandidos = new Set(); desenharTabelaLanc(); });
+$('btn-limpar-selecao-lanc').addEventListener('click', () => { estado.lanc.selecao.clear(); aplicarSelecaoLanc(); });
+$('tabela-lanc').addEventListener('click', (e) => {
+  const L = estado.lanc;
+  const botao = e.target.closest('.btn-exp');
+  if (botao) {
+    const { caminho } = L.linhas[Number(botao.dataset.i)];
+    if (L.expandidos.has(caminho)) L.expandidos.delete(caminho); else L.expandidos.add(caminho);
+    desenharTabelaLanc();
+    return;
+  }
+  const th = e.target.closest('th');
+  if (th) {
+    const col = th.dataset.col;
+    L.ordem = L.ordem.col === col ? { col, desc: !L.ordem.desc } : { col, desc: col !== 'nome' };
+    desenharTabelaLanc();
+    return;
+  }
+  const tr = e.target.closest('tbody tr');
+  if (tr) clicarLinhaLanc(L.linhas[Number(tr.dataset.i)], e.ctrlKey || e.metaKey);
+});
+
+// =====================================================================
 // Menu de páginas (caixa suspensa "Página: …")
 // Filtros sempre em primeiro; páginas novas entram na lista abaixo.
 // =====================================================================
@@ -2968,6 +3598,7 @@ const CHAVE_PAGINA = 'dashboard-farma:pagina';
 const PAGINAS = [
   ['filtros', 'Filtros'],
   ['analise', 'Gráfico e Tabela'],
+  ['lanc', 'Lançamentos Mercado'],
   ['preco', 'Preço'],
   ['preco2', 'Preço 2'],
   ['preco3', 'Preço 3'],
