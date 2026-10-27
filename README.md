@@ -55,7 +55,8 @@ virtual na base: os meses 1–12 da EL entram no MAT atual e os meses 13–24 fo
 Desligado, o dashboard fica exatamente como sem as ELs.
 
 A página **EL Compilado** junta todas as ELs num OnePage (cards, gráficos e tabela resumo) pensado
-para imprimir em uma folha A4 paisagem (botão "Imprimir / PDF").
+para imprimir em uma folha A4 paisagem (botão "Imprimir / PDF"). Na Medida **UN**, os gráficos comparam
+Sell-out (Demanda UN, linha contínua) e Sell-in (Sell-In UN, linha tracejada).
 
 O `exemplo_el.html` é **fictício**, apenas para teste.
 

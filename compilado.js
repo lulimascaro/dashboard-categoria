@@ -153,7 +153,8 @@ async function desenhar() {
   desenharLinhas(grupos, medida, nomeMedida);
   desenharBarras(grupos, medida, nomeMedida);
   desenharEstoque(grupos);
-  desenharLegenda(todos);
+  desenharLegenda(todos, medida === 'un');
+  $('ec-un-linhas').hidden = medida !== 'un';
   desenharTabela(todos);
 }
 
@@ -185,7 +186,86 @@ function desenharCards(grupos) {
 const selecionadas = (grupos) => Object.fromEntries(grupos.map((g) => [g.nome, !ec.ocultas.has(g.nome)]));
 const legendaOculta = (grupos) => ({ show: false, data: grupos.map((g) => g.nome), selected: selecionadas(grupos) });
 
+// Medida UN: Sell-out (Demanda UN, linha contínua) e Sell-in (Sell-In UN, tracejada) na mesma cor
+function desenharLinhasUN(grupos) {
+  const g = grafico('ec-g-linhas');
+  const comOut = $('ec-sellout').checked;
+  const comIn = $('ec-sellin').checked;
+  const series = [];
+  grupos.forEach((gr) => {
+    const base = { name: gr.nome, type: 'line', symbolSize: 4, itemStyle: { color: gr.cor } };
+    if (comOut) series.push({ ...base, lineStyle: { width: 2 }, data: gr.meses.map((m) => m.un) });
+    if (comIn) series.push({ ...base, symbol: 'emptyCircle', lineStyle: { width: 2, type: [6, 4] }, data: gr.meses.map((m) => m.sellUn) });
+  });
+  // linha vertical separando o Ano 1 do Ano 2
+  if (series.length) {
+    series[0].markLine = {
+      silent: true, symbol: 'none', lineStyle: { color: '#045b7b', type: 'dashed', width: 1.5 },
+      label: { formatter: 'Ano 1 | Ano 2', position: 'end', color: '#045b7b', fontSize: 10 },
+      data: [{ xAxis: 11.5 }],
+    };
+  }
+  const k = (v) => (valido(v) ? abreviar(v * 1000) : '-');
+  g.setOption({
+    animation: false,
+    title: { text: 'UN por mês (k): Sell-out e Sell-in', left: 6, top: 2, textStyle: { fontSize: 13, color: '#045b7b' } },
+    legend: legendaOculta(grupos),
+    // ao passar o mouse: Sell-out, Sell-in e a diferença de cada item visível
+    tooltip: {
+      trigger: 'axis',
+      formatter: (ps) => {
+        const i = ps[0].dataIndex;
+        const linhas = grupos.filter((gr) => !ec.ocultas.has(gr.nome)).map((gr) => {
+          const m = gr.meses[i];
+          const dif = valido(m.sellUn) || valido(m.un) ? (m.sellUn || 0) - (m.un || 0) : null;
+          return `<tr><td><span style="display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;background:${gr.cor}"></span>${esc(gr.nome)}</td>
+            <td style="text-align:right;padding-left:10px">${k(m.un)}</td><td style="text-align:right;padding-left:10px">${k(m.sellUn)}</td>
+            <td style="text-align:right;padding-left:10px;color:${valido(dif) && dif < 0 ? VERMELHO : 'inherit'}">${k(dif)}</td></tr>`;
+        }).join('');
+        return `<b>${MESES[i]}</b><table style="font-size:12px"><tr style="color:#777"><td></td><td style="text-align:right;padding-left:10px">Sell-out</td>
+          <td style="text-align:right;padding-left:10px">Sell-in</td><td style="text-align:right;padding-left:10px">Sell-in − Sell-out</td></tr>${linhas}</table>`;
+      },
+    },
+    grid: { left: 52, right: 14, top: 34, bottom: 34 },
+    xAxis: { type: 'category', data: MESES, axisLabel: { fontSize: 9, interval: 1 } },
+    yAxis: { type: 'value', axisLabel: { fontSize: 10, formatter: (v) => abreviar(v * 1000) } },
+    series,
+  }, true);
+}
+
+// Medida UN: em cada ano, uma barra de Sell-out e outra de Sell-in, empilhadas por item
+function desenharBarrasUN(grupos) {
+  const g = grafico('ec-g-barras');
+  // categoria vazia no meio: espaço entre o Ano 1 e o Ano 2
+  const categorias = ['Sell-out\nAno 1', 'Sell-in\nAno 1', '', 'Sell-out\nAno 2', 'Sell-in\nAno 2'];
+  const anual = (gr, campo, a) => soma(gr.meses.slice(a * 12, a * 12 + 12).map((m) => m[campo]));
+  const valores = grupos.map((gr) => [anual(gr, 'un', 0), anual(gr, 'sellUn', 0), null, anual(gr, 'un', 1), anual(gr, 'sellUn', 1)]);
+  const totais = [0, 1, 2, 3, 4].map((i) => (i === 2 ? null : soma(valores.map((v) => v[i]))));
+  g.setOption({
+    animation: false,
+    title: { text: 'UN por ano: Sell-out × Sell-in', left: 6, top: 2, textStyle: { fontSize: 13, color: '#045b7b' } },
+    legend: legendaOculta(grupos),
+    tooltip: { trigger: 'item', formatter: (p) => `${esc(p.seriesName)}<br>${p.name.replace('\n', ' · ')}: <b>${abreviar(p.value * 1000)}</b> (${pct(dividir(p.value, totais[p.dataIndex]))})` },
+    grid: { left: 52, right: 14, top: 40, bottom: 34 },
+    xAxis: { type: 'category', data: categorias, axisLabel: { fontSize: 10, interval: 0 } },
+    yAxis: { type: 'value', max: (v) => v.max * 1.15, axisLabel: { fontSize: 10, formatter: (v) => abreviar(v * 1000) } },
+    series: [
+      ...grupos.map((gr, gi) => ({
+        name: gr.nome, type: 'bar', stack: 'ano', barMaxWidth: 50, barCategoryGap: '20%', itemStyle: { color: gr.cor },
+        data: valores[gi].map((v, i) => ({ value: v, label: { show: totais[i] > 0 && v / totais[i] >= 0.1 } })),
+        label: { position: 'inside', fontSize: 9, color: corTexto(gr.cor), formatter: (p) => pct(dividir(p.value, totais[p.dataIndex])) },
+      })),
+      { // total acima de cada barra (marcador invisível para o rótulo aparecer)
+        name: '__total', type: 'line', silent: true, symbol: 'circle', symbolSize: 1, itemStyle: { color: 'rgba(0,0,0,0)' },
+        lineStyle: { opacity: 0 }, tooltip: { show: false }, data: totais,
+        label: { show: true, position: 'top', fontWeight: 'bold', fontSize: 10, color: '#2B2B2B', formatter: (p) => abreviar(p.value * 1000) },
+      },
+    ],
+  }, true);
+}
+
 function desenharLinhas(grupos, medida, nomeMedida) {
+  if (medida === 'un') { desenharLinhasUN(grupos); return; }
   const g = grafico('ec-g-linhas');
   g.setOption({
     animation: false,
@@ -209,6 +289,7 @@ function desenharLinhas(grupos, medida, nomeMedida) {
 }
 
 function desenharBarras(grupos, medida, nomeMedida) {
+  if (medida === 'un') { desenharBarrasUN(grupos); return; }
   const g = grafico('ec-g-barras');
   const valores = grupos.map((gr) => [0, 1].map((a) => soma(gr.meses.slice(a * 12, a * 12 + 12).map((m) => m[medida]))));
   const totais = [0, 1].map((a) => soma(valores.map((v) => v[a])));
@@ -272,10 +353,14 @@ function desenharEstoque(grupos) {
   }
 }
 
-function desenharLegenda(grupos) {
+function desenharLegenda(grupos, comEstilos) {
   $('ec-legenda').innerHTML = grupos.map((g, i) => `
     <div class="leg-item${ec.ocultas.has(g.nome) ? ' oculta' : ''}" data-i="${i}" title="${esc(g.nome)}">
-      <span class="leg-cor" style="background:${g.cor}"></span><span class="leg-nome">${esc(g.nome)}</span></div>`).join('');
+      <span class="leg-cor" style="background:${g.cor}"></span><span class="leg-nome">${esc(g.nome)}</span></div>`).join('')
+    // Medida UN: explica o estilo das linhas
+    + (comEstilos ? `<div class="ec-leg-estilos">
+      <div class="leg-item estatica"><span class="ec-traco"></span><span class="leg-nome">Sell-out</span></div>
+      <div class="leg-item estatica"><span class="ec-traco ec-tracejado"></span><span class="leg-nome">Sell-in</span></div></div>` : '');
   $('ec-legenda')._grupos = grupos;
 }
 
@@ -319,6 +404,8 @@ function iniciar() {
   $('ec-medida').innerHTML = MEDIDAS.map(([k, r]) => `<option value="${k}">${r}</option>`).join('');
   ec.seletor = window.componentes.criarSeletor('ec-els', { unico: false, vazio: 'Todas', aoMudar: () => { ec.selecionadas.clear(); desenhar(); } });
   $('ec-medida').addEventListener('change', desenhar);
+  $('ec-sellout').addEventListener('change', desenhar);
+  $('ec-sellin').addEventListener('change', desenhar);
   document.querySelectorAll('#ec-visao button').forEach((b) => b.addEventListener('click', () => {
     ec.visao = b.dataset.visao;
     document.querySelectorAll('#ec-visao button').forEach((x) => x.classList.toggle('ativo', x === b));
@@ -339,7 +426,7 @@ function iniciar() {
   });
   // legenda única: oculta/mostra o item em todos os gráficos
   $('ec-legenda').addEventListener('click', (e) => {
-    const item = e.target.closest('.leg-item');
+    const item = e.target.closest('.leg-item[data-i]');
     if (!item) return;
     const nome = $('ec-legenda')._grupos[Number(item.dataset.i)].nome;
     if (ec.ocultas.has(nome)) ec.ocultas.delete(nome); else ec.ocultas.add(nome);

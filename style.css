@@ -660,3 +660,9 @@ body.com-el .chave-el { background: var(--amarelo); color: #333; }
 .barra-seletores label.caixa-clara input { accent-color: var(--amarelo); }
 #kpis-lanc .kpi-valor small { display: block; font-size: 11px; font-weight: 400; opacity: .9; }
 #lanc-data { max-width: 270px !important; }
+/* EL Compilado, Medida UN: estilos Sell-out / Sell-in */
+.ec-un-linhas { display: inline-flex; gap: 14px; }
+.ec-un-linhas[hidden] { display: none; }
+.ec-leg-estilos { border-top: 1px solid #E3E3E3; margin-top: 4px; padding-top: 4px; }
+.ec-traco { width: 22px; height: 0; border-top: 2px solid #333; flex-shrink: 0; }
+.ec-traco.ec-tracejado { border-top-style: dashed; }
