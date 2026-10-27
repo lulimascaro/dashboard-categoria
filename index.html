@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dashboard de Mercado Farmacêutico</title>
   <!-- Ao publicar uma nova versão, atualize o número "?v=" nas duas linhas abaixo -->
-  <link rel="stylesheet" href="style.css?v=20261027-2">
+  <link rel="stylesheet" href="style.css?v=20261027-3">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
-  <script type="module" src="app.js?v=20261027-2"></script>
+  <script type="module" src="app.js?v=20261027-3"></script>
 </head>
 <body>
 
@@ -51,6 +51,7 @@
       <nav class="abas">
         <button class="aba ativa" data-pagina="filtros">Filtros <span id="contador-filtros"></span></button>
         <button class="aba" data-pagina="analise">Gráfico e Tabela</button>
+        <button class="aba" data-pagina="preco">Preço</button>
       </nav>
       <button class="botao-link" id="btn-trocar">Trocar arquivo</button>
     </header>
@@ -133,6 +134,39 @@
             </div>
             <div id="nota-tabela"></div>
           </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Página 3: Preço -->
+    <main id="pagina-preco" class="pagina" hidden>
+      <div class="barra-seletores">
+        <div class="seletor"><span>Apresentação index</span><div class="dropdown" id="dd-index"></div></div>
+        <div class="seletor"><span>Concentração</span><div class="dropdown" id="dd-conc"></div></div>
+        <div class="seletor"><span>Quantidade</span><div class="dropdown" id="dd-qtd"></div></div>
+        <label>Período
+          <select id="preco-periodo">
+            <option value="1" data-mensal>Último mês</option>
+            <option value="3" data-mensal>Últimos 3 meses</option>
+            <option value="6" data-mensal selected>Últimos 6 meses</option>
+            <option value="MAT">MAT</option>
+            <option value="YTD">YTD</option>
+          </select>
+        </label>
+        <label>Ordenar por
+          <select id="preco-ordem">
+            <option value="unit">RCD R$/UND</option>
+            <option value="total">RCD total (R$)</option>
+          </select>
+        </label>
+        <label>Top N <input type="number" id="preco-topn" value="10" min="1" step="1"></label>
+      </div>
+      <div class="preco-conteudo">
+        <h2 id="preco-titulo"></h2>
+        <div class="card-preco">
+          <div id="grafico-preco"></div>
+          <div class="tabela-preco-rolagem"><table id="tabela-preco"></table></div>
+          <div id="preco-rodape"></div>
         </div>
       </div>
     </main>

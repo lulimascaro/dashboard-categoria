@@ -281,18 +281,27 @@ async function carregarArquivo(arquivo) {
       selects.push(`SUM(CASE WHEN ${ehUnd} THEN ${periodos[p]} END) AS und_${p}`);
       selects.push(`SUM(CASE WHEN ${ehUnd} THEN ${periodos[p]} * ${qtd} END) AS dos_${p}`);
     }
-    // Valores de cada mês (para o Tempo = Mês)
+    // RC (RCON) e PF (RPF) para a aba Preço
+    for (const p of ['MAT0', 'YTD0']) {
+      selects.push(`SUM(CASE WHEN ${med} = 'RCON' THEN ${periodos[p]} END) AS rc_${p}`);
+      selects.push(`SUM(CASE WHEN ${med} = 'RPF' THEN ${periodos[p]} END) AS pf_${p}`);
+    }
+    // Valores de cada mês (para o Tempo = Mês e para a aba Preço)
     meses.forEach((m, i) => {
-      selects.push(`SUM(CASE WHEN ${med} = 'RCD' THEN num(${sqlColuna(m.coluna)}) END) AS rcd_m${i}`);
-      selects.push(`SUM(CASE WHEN ${ehUnd} THEN num(${sqlColuna(m.coluna)}) END) AS und_m${i}`);
+      const v = `num(${sqlColuna(m.coluna)})`;
+      selects.push(`SUM(CASE WHEN ${med} = 'RCD' THEN ${v} END) AS rcd_m${i}`);
+      selects.push(`SUM(CASE WHEN ${ehUnd} THEN ${v} END) AS und_m${i}`);
+      selects.push(`SUM(CASE WHEN ${med} = 'RCON' THEN ${v} END) AS rc_m${i}`);
+      selects.push(`SUM(CASE WHEN ${med} = 'RPF' THEN ${v} END) AS pf_m${i}`);
     });
+    selects.push(`${qtd} AS qtdnum`);
     estado.meses = meses.map(rotuloMes);
 
     mostrarProgresso('Processando os números (pode levar alguns segundos em arquivos grandes)…', 0.65);
     await estado.conn.query(`CREATE OR REPLACE TABLE fato AS
       SELECT ${selects.join(',\n')}
       FROM ${leitura}
-      WHERE ${med} = 'RCD' OR ${ehUnd}
+      WHERE ${med} IN ('RCD', 'RCON', 'RPF') OR ${ehUnd}
       GROUP BY ALL`);
     // libera a memória do arquivo bruto: a tabela já foi criada
     await estado.db.dropFile(nomeInterno);
@@ -379,6 +388,7 @@ function prepararInterface() {
   estado.expandidos = new Set();
   estado.ordem = { col: 'r0', desc: true };
   renderizarSeletores();
+  prepararPreco();
 }
 
 function criarCardFiltro(d) {
@@ -472,7 +482,9 @@ async function atualizarTudo() {
     : 'Sem filtros aplicados';
 
   estado.analisePendente = true;
+  estado.precoPendente = true;
   if (estado.pagina === 'analise') await atualizarAnalise();
+  if (estado.pagina === 'preco') await atualizarPreco();
 }
 
 function zerarFiltros() {
@@ -637,9 +649,14 @@ function trocarPagina(pagina) {
   document.querySelectorAll('.aba').forEach((b) => b.classList.toggle('ativa', b.dataset.pagina === pagina));
   $('pagina-filtros').hidden = pagina !== 'filtros';
   $('pagina-analise').hidden = pagina !== 'analise';
+  $('pagina-preco').hidden = pagina !== 'preco';
   if (pagina === 'analise') {
     if (estado.analisePendente) atualizarAnalise();
     else Object.values(estado.graficos).forEach((g) => g.resize());
+  }
+  if (pagina === 'preco') {
+    if (estado.precoPendente) atualizarPreco();
+    else if (estado.graficoPreco) { estado.graficoPreco.resize(); desenharPreco(); }
   }
 }
 
@@ -1260,3 +1277,338 @@ $('legenda').addEventListener('click', (e) => {
 $('versao').textContent = 'versão ' + (new URL(import.meta.url).searchParams.get('v') || 'local');
 
 window.addEventListener('resize', () => Object.values(estado.graficos).forEach((g) => g.resize()));
+
+// =====================================================================
+// Aba Preço: preço médio ponderado por apresentação (valor ÷ unidades)
+// =====================================================================
+const LARGURA_ROTULO_PRECO = 190; // coluna de rótulos da tabela = margem esquerda do gráfico
+const COR_RC = '#C0392B';
+const COR_INDEX = '#FFF4CC';
+const fmt2 = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmt3 = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+
+estado.preco = { index: null, conc: new Set(), qtd: new Set(), seletores: {} };
+
+function reais(v) {
+  if (!valido(v)) return '-';
+  return 'R$ ' + (Math.abs(v) < 1 && v !== 0 ? fmt3 : fmt2).format(v);
+}
+
+// clareia uma cor (mistura com branco)
+function clarear(hex, f = 0.55) {
+  const n = parseInt(hex.slice(1), 16);
+  const c = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((x) => Math.round(x + (255 - x) * f));
+  return '#' + c.map((x) => x.toString(16).padStart(2, '0')).join('');
+}
+
+// "10000FCC" -> { valor: 10000, unidade: 'FCC' };  "500 mg" -> { valor: 500, unidade: 'MG' }
+function lerConcentracao(texto) {
+  const m = String(texto || '').trim().match(/^([\d.,]+)\s*(.*)$/);
+  if (!m) return null;
+  const numero = m[1].includes(',') ? m[1].replace(/\./g, '').replace(',', '.') : m[1];
+  const valor = parseFloat(numero);
+  if (!Number.isFinite(valor) || valor <= 0) return null;
+  return { valor, unidade: m[2].toUpperCase().replace(/\s+/g, '') };
+}
+
+// Caixa suspensa genérica (seleção única ou múltipla) no estilo do Power BI
+function criarSeletorPreco(id, { unico, vazio, aoMudar }) {
+  const el = $(id);
+  el.innerHTML = `
+    <button type="button" class="dd-botao dd-largo"><span class="dd-texto"></span><span class="dd-seta">▾</span></button>
+    <div class="dd-painel dd-painel-largo" hidden>
+      <input type="search" class="dd-busca" placeholder="Pesquisar">
+      <div class="dd-lista"></div>
+    </div>`;
+  const painel = el.querySelector('.dd-painel');
+  const busca = el.querySelector('.dd-busca');
+  const lista = el.querySelector('.dd-lista');
+  const sel = { opcoes: [], valores: new Set() };
+  let temporizadorSel = null;
+
+  sel.desenhar = () => {
+    const v = [...sel.valores];
+    el.querySelector('.dd-texto').textContent = v.length === 0 ? vazio : v.length === 1 ? v[0] : 'Seleções múltiplas';
+    el.querySelector('.dd-botao').title = v.join(', ');
+    if (painel.hidden) return;
+    const texto = normalizar(busca.value);
+    const filtradas = sel.opcoes.filter((o) => !texto || normalizar(o).includes(texto));
+    const visiveis = filtradas.slice(0, MAX_OPCOES_VISIVEIS);
+    lista._visiveis = visiveis;
+    lista.innerHTML = visiveis.map((o, i) =>
+      `<div class="dd-item${sel.valores.has(o) ? ' marcado' : ''}" data-i="${i}" title="${escaparHtml(o)}">
+        <span class="dd-caixa${unico ? ' redonda' : ''}"></span><span class="dd-nome">${escaparHtml(o)}</span></div>`).join('')
+      + (filtradas.length > visiveis.length ? `<div class="dd-vazio">Mostrando ${visiveis.length} de ${filtradas.length}. Use a busca.</div>` : '')
+      || '<div class="dd-vazio">Nada encontrado</div>';
+  };
+  el.querySelector('.dd-botao').onclick = () => {
+    const abrir = painel.hidden;
+    document.querySelectorAll('.dd-painel').forEach((p) => { p.hidden = true; });
+    painel.hidden = !abrir;
+    if (abrir) { busca.value = ''; sel.desenhar(); busca.focus(); }
+  };
+  busca.oninput = sel.desenhar;
+  lista.onclick = (e) => {
+    const item = e.target.closest('.dd-item');
+    if (!item) return;
+    const valor = lista._visiveis[Number(item.dataset.i)];
+    if (unico) {
+      sel.valores = new Set([valor]);
+      painel.hidden = true;
+      sel.desenhar();
+      aoMudar();
+      return;
+    }
+    if (sel.valores.has(valor)) sel.valores.delete(valor); else sel.valores.add(valor);
+    sel.desenhar();
+    clearTimeout(temporizadorSel);
+    temporizadorSel = setTimeout(aoMudar, 300);
+  };
+  return sel;
+}
+
+function prepararPreco() {
+  const s = estado.preco.seletores;
+  s.index = criarSeletorPreco('dd-index', { unico: true, vazio: '(escolha)', aoMudar: atualizarPreco });
+  s.conc = criarSeletorPreco('dd-conc', { unico: false, vazio: 'Todas', aoMudar: atualizarPreco });
+  s.qtd = criarSeletorPreco('dd-qtd', { unico: false, vazio: 'Todas', aoMudar: atualizarPreco });
+  // "Último mês / 3 / 6 meses" só existem se a base tiver colunas mensais
+  const temMeses = estado.meses.length > 0;
+  $('preco-periodo').querySelectorAll('option[data-mensal]').forEach((o) => { o.hidden = !temMeses; });
+  $('preco-periodo').value = temMeses ? '6' : 'MAT';
+  estado.precoPendente = true;
+  // cor fixa por corporação (ordem alfabética, então é sempre a mesma)
+  consultar('SELECT DISTINCT d_corp AS c FROM fato ORDER BY 1').then((linhas) => {
+    estado.coresCorp = {};
+    linhas.forEach((l, i) => { estado.coresCorp[l.c] = CORES[i % CORES.length]; });
+  });
+}
+
+// Expressão SQL do período escolhido para uma medida (rcd, pf, rc, und)
+function exprPeriodoPreco(medida) {
+  const p = $('preco-periodo').value;
+  if (p === 'MAT' || p === 'YTD') return `COALESCE(${medida}_${p}0, 0)`;
+  const n = estado.meses.length;
+  const k = Math.min(Number(p), n);
+  const partes = [];
+  for (let i = n - k; i < n; i++) partes.push(`COALESCE(${medida}_m${i}, 0)`);
+  return partes.length ? '(' + partes.join(' + ') + ')' : '0';
+}
+
+function descricaoPeriodo() {
+  const p = $('preco-periodo').value;
+  const n = estado.meses.length;
+  const ultimoMes = n ? estado.meses[n - 1] : '';
+  if (p === 'MAT') return { longo: `MAT (12 meses até ${ultimoMes || 'o último mês'})`, curto: 'MAT' };
+  if (p === 'YTD') return { longo: `YTD (ano até ${ultimoMes || 'o último mês'})`, curto: 'YTD' };
+  if (p === '1') return { longo: `Último mês (${ultimoMes})`, curto: ultimoMes };
+  const k = Math.min(Number(p), n);
+  return { longo: `Últimos ${k} meses (${estado.meses[n - k]} a ${ultimoMes})`, curto: `últ. ${k} meses` };
+}
+
+let ultimoPreco = null;
+async function atualizarPreco() {
+  estado.precoPendente = false;
+  const s = estado.preco.seletores;
+  const where = clausulaWhere(null);
+  const e = (cond) => (where ? `${where} AND ${cond}` : `WHERE ${cond}`);
+  const lista = (set) => [...set].map(sqlTexto).join(', ');
+  const condConc = s.conc.valores.size ? `d_conc IN (${lista(s.conc.valores)})` : 'TRUE';
+  const condQtd = s.qtd.valores.size ? `d_qtd IN (${lista(s.qtd.valores)})` : 'TRUE';
+  const rcd = exprPeriodoPreco('rcd');
+
+  // opções dos seletores (respeitam a página Filtros e um ao outro)
+  const [apres, concs, qtds] = await Promise.all([
+    consultar(`SELECT d_apres AS v, SUM(${rcd}) AS r FROM fato ${where} GROUP BY 1`),
+    consultar(`SELECT DISTINCT d_conc AS v FROM fato ${e(condQtd)}`),
+    consultar(`SELECT DISTINCT d_qtd AS v FROM fato ${e(condConc)}`),
+  ]);
+  const alfabetica = (a, b) => String(a).localeCompare(String(b), 'pt-BR', { numeric: true });
+  s.index.opcoes = apres.map((l) => l.v).sort(alfabetica);
+  s.conc.opcoes = concs.map((l) => l.v).sort(alfabetica);
+  s.qtd.opcoes = qtds.map((l) => l.v).sort(alfabetica);
+  // index padrão: a apresentação com maior RCD no período
+  let index = [...s.index.valores][0];
+  if (!index || !s.index.opcoes.includes(index)) {
+    const maior = apres.reduce((m, l) => (!m || (l.r || 0) > (m.r || 0) ? l : m), null);
+    index = maior ? maior.v : null;
+    s.index.valores = new Set(index ? [index] : []);
+  }
+  Object.values(s).forEach((x) => x.desenhar());
+
+  if (!index) {
+    ultimoPreco = null;
+    $('preco-titulo').textContent = 'Preço';
+    $('tabela-preco').innerHTML = '';
+    $('preco-rodape').textContent = 'Nenhuma apresentação com os filtros atuais.';
+    if (estado.graficoPreco) estado.graficoPreco.clear();
+    return;
+  }
+
+  // a apresentação index sempre entra, mesmo fora dos filtros de concentração/quantidade
+  const linhas = await consultar(`SELECT d_apres AS apres,
+      any_value(d_produto) AS produto, any_value(sigla) AS sigla, any_value(d_corp) AS corp,
+      any_value(d_conc) AS conc, any_value(d_qtd) AS qtd, any_value(d_forma) AS forma, any_value(qtdnum) AS qtdnum,
+      SUM(${rcd}) AS rcd, SUM(${exprPeriodoPreco('pf')}) AS pf,
+      SUM(${exprPeriodoPreco('rc')}) AS rc, SUM(${exprPeriodoPreco('und')}) AS und
+    FROM fato ${e(`((${condConc} AND ${condQtd}) OR d_apres = ${sqlTexto(index)})`)}
+    GROUP BY 1`);
+
+  // cálculos por apresentação
+  const porUnidade = (v, und) => (valido(v) && v !== 0 && und > 0 ? v / und : null);
+  for (const a of linhas) {
+    a.rcdU = porUnidade(a.rcd, a.und);
+    a.pfU = porUnidade(a.pf, a.und);
+    a.rcU = porUnidade(a.rc, a.und);
+    a.desc = a.rcdU !== null && a.pfU ? 1 - a.rcdU / a.pfU : null;
+    a.margem = a.rcdU !== null && a.rcU ? 1 - a.rcdU / a.rcU : null;
+    a.mkup = a.rcU !== null && a.rcdU ? a.rcU / a.rcdU - 1 : null;
+    a.rcDose = a.rcU !== null && a.qtdnum > 0 ? a.rcU / a.qtdnum : null;
+    a.ehIndex = a.apres === index;
+  }
+  const idx = linhas.find((a) => a.ehIndex);
+  const concIdx = lerConcentracao(idx.conc);
+  for (const a of linhas) {
+    a.indexRc = a.rcU !== null && idx.rcU ? (a.rcU / idx.rcU) * 100 : null;
+    const c = lerConcentracao(a.conc);
+    a.rcConc = a.rcDose !== null && concIdx && c && c.unidade === concIdx.unidade
+      ? a.rcDose * (concIdx.valor / c.valor) : null;
+  }
+
+  // ordenação + Top N (o index sempre aparece)
+  const chave = $('preco-ordem').value === 'total' ? 'rcd' : 'rcdU';
+  const ordenar = (lst) => lst.sort((a, b) => (valido(b[chave]) ? b[chave] : -Infinity) - (valido(a[chave]) ? a[chave] : -Infinity));
+  ordenar(linhas);
+  const n = Math.max(1, parseInt($('preco-topn').value, 10) || 10);
+  let itens = linhas.slice(0, n);
+  if (!itens.includes(idx)) itens = ordenar([...itens, idx]);
+
+  ultimoPreco = { itens, idx, concIdx, periodo: descricaoPeriodo(), total: linhas.length };
+  desenharPreco();
+}
+
+function nomeCurto(a) { return `${a.produto} (${a.sigla})`; }
+
+function desenharPreco() {
+  if (!ultimoPreco) return;
+  const { itens, idx, periodo, total } = ultimoPreco;
+  const s = estado.preco.seletores;
+  const cor = (a) => (estado.coresCorp && estado.coresCorp[a.corp]) || CORES[0];
+
+  // título automático
+  const filtros = [[...s.conc.valores].join(', '), [...s.qtd.valores].join(', ')].filter(Boolean).join(' ');
+  $('preco-titulo').textContent = `Preço${filtros ? ' — ' + filtros : ''} | Index: ${nomeCurto(idx)}`;
+
+  // ----- gráfico -----
+  const el = $('grafico-preco');
+  if (!estado.graficoPreco) estado.graficoPreco = echarts.init(el);
+  const g = estado.graficoPreco;
+  const posIndex = itens.indexOf(idx);
+  const largura = (el.clientWidth - LARGURA_ROTULO_PRECO) / itens.length;
+  const vertical = largura < 120; // pouco espaço: valores das barras na vertical
+  const rotuloBarra = {
+    show: true, position: 'top', fontSize: 10, color: '#2B2B2B',
+    rotate: vertical ? 90 : 0, align: vertical ? 'left' : 'center', verticalAlign: 'middle', distance: 4,
+    formatter: (p) => reais(p.value),
+  };
+  g.setOption({
+    animation: false,
+    legend: {
+      left: 10, top: 6, itemWidth: 14, itemHeight: 10, textStyle: { fontSize: 11 },
+      data: ['RCD (cor da corporação)', 'PF (tom claro)', 'RC (preço ao consumidor)'],
+    },
+    tooltip: {
+      trigger: 'axis', axisPointer: { type: 'shadow' },
+      formatter: (ps) => {
+        const a = itens[ps[0].dataIndex];
+        return `<b>${escaparHtml(a.apres)}</b><br>${escaparHtml(a.corp)}<br>RCD/UND: ${reais(a.rcdU)}<br>PF/UND: ${reais(a.pfU)}<br><span style="color:${COR_RC}">RC/UND: ${reais(a.rcU)}</span>`;
+      },
+    },
+    grid: { left: LARGURA_ROTULO_PRECO, right: 0, top: 60, bottom: 6 },
+    xAxis: { type: 'category', data: itens.map((a) => a.apres), axisLabel: { show: false }, axisTick: { show: false } },
+    yAxis: {
+      type: 'value', axisLabel: { formatter: (v) => 'R$ ' + fmt0.format(v) },
+      max: (v) => v.max * (vertical ? 1.4 : 1.22),
+    },
+    series: [
+      { // fundo amarelo-claro na coluna do index
+        type: 'custom', silent: true, z: 0, tooltip: { show: false }, data: posIndex >= 0 ? [[posIndex, 0]] : [],
+        renderItem: (params, api) => {
+          const cs = params.coordSys;
+          const w = api.size([1, 0])[0];
+          const x = api.coord([api.value(0), 0])[0];
+          return { type: 'rect', shape: { x: x - w / 2, y: 0, width: w, height: cs.y + cs.height + 6 }, style: { fill: COR_INDEX } };
+        },
+      },
+      {
+        name: 'RCD (cor da corporação)', type: 'bar', z: 2, barGap: '8%', barCategoryGap: '30%',
+        itemStyle: { color: '#6B76A6' },
+        data: itens.map((a) => ({ value: a.rcdU, itemStyle: { color: cor(a) } })),
+        label: rotuloBarra,
+      },
+      {
+        name: 'PF (tom claro)', type: 'bar', z: 2,
+        itemStyle: { color: clarear('#6B76A6') },
+        data: itens.map((a) => ({ value: a.pfU, itemStyle: { color: clarear(cor(a)) } })),
+        label: rotuloBarra,
+      },
+      { // RC: traço vermelho com o valor acima
+        name: 'RC (preço ao consumidor)', type: 'custom', z: 3, itemStyle: { color: COR_RC },
+        encode: { x: 0, y: 1 }, tooltip: { show: false },
+        data: itens.map((a, i) => [i, a.rcU, Math.max(a.rcdU || 0, a.pfU || 0)]),
+        renderItem: (params, api) => {
+          if (!valido(api.value(1))) return null;
+          const [x, y] = api.coord([api.value(0), api.value(1)]);
+          const w = api.size([1, 0])[0] * 0.7;
+          // o valor vermelho fica acima do traço e também acima dos valores das barras
+          const yBarra = api.coord([api.value(0), api.value(2)])[1];
+          const yTexto = Math.min(y - 5, yBarra - (vertical ? 62 : 18));
+          return {
+            type: 'group',
+            children: [
+              { type: 'line', shape: { x1: x - w / 2, y1: y, x2: x + w / 2, y2: y }, style: { stroke: COR_RC, lineWidth: 3 } },
+              {
+                type: 'text', x, y: yTexto,
+                style: { text: reais(api.value(1)), fill: COR_RC, font: 'bold 11px sans-serif', textAlign: 'center', textVerticalAlign: 'bottom' },
+              },
+            ],
+          };
+        },
+      },
+    ],
+  }, true);
+  g.resize();
+
+  // ----- tabela (mesmas colunas do gráfico) -----
+  const concIdxTexto = idx.conc;
+  const pct = (v) => percentual(v);
+  const linhasTabela = [
+    ['RCD (R$/UND)', (a) => reais(a.rcdU)],
+    ['PF (R$/UND)', (a) => reais(a.pfU)],
+    ['RC (R$/UND)', (a) => reais(a.rcU), 'v-rc'],
+    ['Desc. Com.', (a) => pct(a.desc), ''],
+    ['Margem PDV', (a) => pct(a.margem)],
+    ['MKUP DIST', (a) => pct(a.mkup)],
+    [`Index RC vs ${nomeCurto(idx)}`, (a) => (valido(a.indexRc) ? fmt0.format(a.indexRc) : '-'), 'v-index'],
+    ['RC por dose', (a) => reais(a.rcDose), 'v-rc'],
+    [`RC por ${concIdxTexto}`, (a) => reais(a.rcConc), 'v-rc'],
+    [`UND ${periodo.curto} (mil)`, (a) => (a.und > 0 ? fmt1.format(a.und / 1000) : '-')],
+  ];
+  const cabecalho = `<thead><tr><th class="preco-rotulo">Apresentação</th>${itens.map((a) => `
+      <th class="${a.ehIndex ? 'col-index' : ''}" title="${escaparHtml(a.apres)}">
+        <b>${escaparHtml(nomeCurto(a).toUpperCase())}</b>
+        <small>${escaparHtml([a.conc, a.forma, a.qtd].join(' · '))}</small>
+      </th>`).join('')}</tr></thead>`;
+  const corpo = '<tbody>' + linhasTabela.map(([rotulo, f, cls = '']) =>
+    `<tr><td class="preco-rotulo ${cls}">${escaparHtml(rotulo)}</td>${itens.map((a) =>
+      `<td class="${cls}${a.ehIndex ? ' col-index' : ''}">${f(a)}</td>`).join('')}</tr>`).join('') + '</tbody>';
+  $('tabela-preco').innerHTML = `<colgroup><col style="width:${LARGURA_ROTULO_PRECO}px">${itens.map(() => '<col>').join('')}</colgroup>` + cabecalho + corpo;
+
+  $('preco-rodape').innerHTML = `Período: <b>${escaparHtml(periodo.longo)}</b>.
+    Preço médio ponderado = soma do valor no período ÷ soma das unidades (UND) no período.
+    ${total > itens.length ? `Mostrando ${itens.length} de ${total} apresentações.` : ''}`;
+}
+
+['preco-periodo', 'preco-ordem'].forEach((id) => $(id).addEventListener('change', atualizarPreco));
+$('preco-topn').addEventListener('input', () => { clearTimeout(estado.tempoTopnPreco); estado.tempoTopnPreco = setTimeout(atualizarPreco, 300); });
+window.addEventListener('resize', () => { if (estado.graficoPreco && estado.pagina === 'preco') { estado.graficoPreco.resize(); desenharPreco(); } });
