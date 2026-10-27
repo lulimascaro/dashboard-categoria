@@ -424,6 +424,7 @@ function prepararInterface() {
   estado.ordem = { col: 'r0', desc: true };
   renderizarSeletores();
   prepararLanc();
+  prepararPareto();
   prepararPreco();
   prepararPreco2();
   prepararPreco3();
@@ -562,6 +563,8 @@ async function atualizarTudo() {
   estado.precoPendente = true;
   if (estado.pagina === 'analise') await atualizarAnalise();
   estado.lancPendente = true;
+  estado.paretoPendente = true;
+  if (estado.pagina === 'pareto') await atualizarPareto();
   if (estado.pagina === 'lanc') await atualizarLanc();
   if (estado.pagina === 'preco') await atualizarPreco();
   estado.preco2Pendente = true;
@@ -683,17 +686,18 @@ document.addEventListener('mousedown', (e) => {
 // Recebe itens com .r0 (RCD do período atual) e devolve quais ficam,
 // quais vão para "Outros" e quantos ficam escondidos.
 // ---------------------------------------------------------------------
-function aplicarExibicao(itens, exib = estado.exib) {
+// campo = valor usado no ranking (padrão: RCD do período)
+function aplicarExibicao(itens, exib = estado.exib, campo = 'r0') {
   const { topN, outros, auto80 } = exib;
-  const ordenados = [...itens].sort((a, b) => (b.r0 || 0) - (a.r0 || 0));
+  const ordenados = [...itens].sort((a, b) => (b[campo] || 0) - (a[campo] || 0));
   let n = ordenados.length;
   let agrupar = false;
   if (auto80) {
-    const total = ordenados.reduce((s, i) => s + Math.max(0, i.r0 || 0), 0);
+    const total = ordenados.reduce((s, i) => s + Math.max(0, i[campo] || 0), 0);
     if (total > 0) {
       let acumulado = 0;
       n = 0;
-      while (n < ordenados.length && acumulado < 0.8 * total) { acumulado += Math.max(0, ordenados[n].r0 || 0); n++; }
+      while (n < ordenados.length && acumulado < 0.8 * total) { acumulado += Math.max(0, ordenados[n][campo] || 0); n++; }
     }
     agrupar = true;
   } else if (topN > 0) {
@@ -749,6 +753,7 @@ async function trocarPagina(pagina) {
   $('pagina-filtros').hidden = pagina !== 'filtros';
   $('pagina-analise').hidden = pagina !== 'analise';
   $('pagina-lanc').hidden = pagina !== 'lanc';
+  $('pagina-pareto').hidden = pagina !== 'pareto';
   $('pagina-preco').hidden = pagina !== 'preco';
   $('pagina-preco2').hidden = pagina !== 'preco2';
   $('pagina-preco3').hidden = pagina !== 'preco3';
@@ -758,6 +763,10 @@ async function trocarPagina(pagina) {
   if (pagina === 'analise') {
     if (estado.analisePendente) atualizarAnalise();
     else Object.values(estado.graficos).forEach((g) => g.resize());
+  }
+  if (pagina === 'pareto') {
+    if (estado.paretoPendente) atualizarPareto();
+    else desenharGraficoPareto();
   }
   if (pagina === 'lanc') {
     if (estado.lancPendente) atualizarLanc();
@@ -2666,7 +2675,7 @@ async function aplicarInfoprice() {
     }
   }
   // todas as páginas recalculam com o RC novo
-  estado.analisePendente = estado.lancPendente = estado.precoPendente = estado.preco2Pendente = estado.preco3Pendente = true;
+  estado.analisePendente = estado.paretoPendente = estado.lancPendente = estado.precoPendente = estado.preco2Pendente = estado.preco3Pendente = true;
   desenharResumoIP();
 }
 
@@ -2920,7 +2929,7 @@ async function calcularSugestaoProj() {
 async function aposMudancaEL(reconstruir) {
   if (!estado.conn) return;
   if (reconstruir) await reconstruirEL();
-  estado.analisePendente = estado.lancPendente = estado.precoPendente = estado.preco2Pendente = estado.preco3Pendente = true;
+  estado.analisePendente = estado.paretoPendente = estado.lancPendente = estado.precoPendente = estado.preco2Pendente = estado.preco3Pendente = true;
   await atualizarTudo();
 }
 
@@ -2988,6 +2997,498 @@ window.addEventListener('projecao-alterada', () => {
 function estiloProj(projetado) {
   return projetado ? { itemStyle: { opacity: 0.55, decal: HACHURA } } : {};
 }
+
+// =====================================================================
+// Pareto: itens ordenados do maior para o menor, % acumulado e classes
+// A (até 80%), B (80–95%) e C (acima de 95%). Respeita os filtros e as ELs.
+// =====================================================================
+const MEDIDAS_PARETO = { rcd: 'RCD', und: 'UND', rc: 'RCON', pf: 'RPF' };
+const COR_CLASSE = { A: '#6B76A6', B: '#A58BDB', C: '#D3D3D3' };
+const COR_OUTROS_PARETO = '#5A5A5A';
+const LARGURA_BARRA_PARETO = 42; // px por barra; acima da largura do card, rolagem horizontal
+estado.par = {
+  dimsGrafico: [], dimsTabela: [], expandidos: new Set(), selecao: new Map(),
+  ordem: { col: 'r0', desc: true }, exib: { topN: null, outros: false, auto80: false },
+  grafico: null, tabela: null, linhas: [],
+};
+estado.paretoPendente = true;
+
+// classe pelo % acumulado ANTES do item: o item que cruza 80% ainda é A (o mesmo do "Aglutinar 80%")
+const classePareto = (antes) => (antes < 0.8 ? 'A' : antes < 0.95 ? 'B' : 'C');
+
+function prepararPareto() {
+  const P = estado.par;
+  const tem = (k) => estado.dims.some((d) => d.key === k);
+  const padrao = tem('produto') ? [PRODUTO_CORP] : estado.dims.slice(0, 1).map((d) => d.key);
+  P.dimsGrafico = [...padrao];
+  P.dimsTabela = [...padrao];
+  P.expandidos = new Set();
+  P.selecao = new Map();
+  const base = estado.dims.map((d) => d.key);
+  montarSuspenso('dd-grafico-par', P.dimsGrafico, [...base, PRODUTO_CORP], () => { limparSelecaoPareto(false); atualizarGraficoPareto(); });
+  montarSuspenso('dd-tabela-par', P.dimsTabela, [...base, PRODUTO_CORP], () => {
+    P.expandidos = new Set();
+    limparSelecaoPareto(false);
+    atualizarTabelaPareto();
+  });
+  P.ordem = { col: colunaMedidaPareto(), desc: true };
+}
+
+// coluna da tabela que tem o valor da Medida escolhida
+const colunaMedidaPareto = () => ({ rcd: 'r0', und: 'u0' }[$('par-medida').value] || 'v');
+
+// colunas do período escolhido: atual, anterior (Evol.) e 4 anos antes (CAGR)
+function periodoPareto() {
+  const p = $('par-periodo').value;
+  if (p === 'MATP') return { atual: 'MATP', ant: 'MAT0', base: 'MAT3', rot: 'MAT+1' };
+  if (p === 'YTD0') return { atual: 'YTD0', ant: 'YTD1', base: 'YTD4', rot: 'YTD' };
+  const k = Number(p.slice(3));
+  return { atual: `MAT${k}`, ant: k < 4 ? `MAT${k + 1}` : null, base: k === 0 ? 'MAT4' : null, rot: k ? `MAT-${k}` : 'MAT' };
+}
+const somaPeriodo = (med, c) => (c ? `SUM(${colExpr(med, c)})` : 'NULL');
+
+// Filtros + linhas/barras clicadas (só nesta página)
+function whereParetoSel() {
+  const base = clausulaWhere(null);
+  if (!estado.par.selecao.size) return base;
+  const sel = '(' + [...estado.par.selecao.values()].join(' OR ') + ')';
+  return base ? `${base} AND ${sel}` : `WHERE ${sel}`;
+}
+
+async function atualizarPareto() {
+  estado.paretoPendente = false;
+  // MAT+1 só existe com o interruptor ligado
+  const opcaoP = $('par-periodo').querySelector('option[value="MATP"]');
+  opcaoP.hidden = !elLigado();
+  if (!elLigado() && $('par-periodo').value === 'MATP') $('par-periodo').value = 'MAT0';
+  estado.par.selecao.clear();
+  await Promise.all([atualizarKpisPareto(), atualizarGraficoPareto(), atualizarTabelaPareto()]);
+}
+
+// ----- KPIs: os mesmos da página Gráfico e Tabela + os do Pareto -----
+async function atualizarKpisPareto() {
+  const per = periodoPareto();
+  const med = $('par-medida').value;
+  const where = whereParetoSel();
+  const comVenda = `(COALESCE(${colExpr('rcd', per.atual)}, 0) <> 0 OR COALESCE(${colExpr('und', per.atual)}, 0) <> 0)`;
+  const dims = estado.par.dimsGrafico;
+  const grupo = dims.length ? `concat_ws(' | ', ${dims.map(exprDim).join(', ')})` : `'Total'`;
+  const [[k], itens] = await Promise.all([
+    consultar(`SELECT
+        ${somaPeriodo('rcd', per.atual)} r0, ${somaPeriodo('rcd', per.ant)} r1, ${somaPeriodo('rcd', per.base)} r4,
+        ${somaPeriodo('und', per.atual)} u0, ${somaPeriodo('und', per.ant)} u1, ${somaPeriodo('und', per.base)} u4,
+        COUNT(DISTINCT d_corp) FILTER (WHERE ${comVenda}) corps,
+        COUNT(DISTINCT d_produto) FILTER (WHERE ${comVenda}) marcas,
+        COUNT(DISTINCT sku) FILTER (WHERE ${comVenda}) skus
+      FROM fato ${where}`),
+    consultar(`SELECT ${grupo} AS g, ${somaPeriodo(med, per.atual)} AS v FROM fato ${where} GROUP BY 1`),
+  ]);
+  // Pareto dos itens do "Gráfico" (com a seleção da tabela, se houver)
+  const valores = itens.map((i) => Math.max(0, i.v || 0)).sort((a, b) => b - a);
+  const total = valores.reduce((s, v) => s + v, 0);
+  let acum = 0, nA = 0;
+  for (const v of valores) { if (total > 0 && acum / total < 0.8) nA++; acum += v; }
+  const nItens = valores.filter((v) => v > 0).length;
+  const top5 = valores.slice(0, 5).reduce((s, v) => s + v, 0);
+  const T = per.rot;
+  const cards = [
+    ['kpi-rcd', `RCD ${T}`, abreviar(k.r0)],
+    ['kpi-rcd', `Evol. RCD ${T}`, percentual(evolucao(k.r0, k.r1))],
+    ['kpi-rcd', 'CAGR 5Y RCD', percentual(cagr(k.r0, k.r4))],
+    ['kpi-und', `UND ${T}`, abreviar(k.u0)],
+    ['kpi-und', `Evol. UND ${T}`, percentual(evolucao(k.u0, k.u1))],
+    ['kpi-und', 'CAGR 5Y UND', percentual(cagr(k.u0, k.u4))],
+    ['kpi-cont', '#Corporações', inteiro(k.corps)],
+    ['kpi-cont', '#Marcas', inteiro(k.marcas)],
+    ['kpi-cont', '#SKUs', inteiro(k.skus)],
+    ['kpi-pareto', 'Nº itens classe A', inteiro(total > 0 ? nA : null)],
+    ['kpi-pareto', '% dos itens que fazem 80%', percentual(divisao(nA, nItens))],
+    ['kpi-pareto', 'Concentração Top 5 (%)', percentual(divisao(top5, total))],
+  ];
+  if (per.atual === 'MATP') cards.forEach((c) => { if (/MAT\+1/.test(c[1])) c[0] += ' kpi-proj'; });
+  $('kpis-par').innerHTML = cards.map(([cls, rotulo, valor]) =>
+    `<div class="kpi ${cls}"><div class="kpi-rotulo">${rotulo}</div><div class="kpi-valor">${valor}</div></div>`).join('');
+}
+
+// ----- Gráfico -----
+async function atualizarGraficoPareto() {
+  const P = estado.par;
+  const per = periodoPareto();
+  const med = $('par-medida').value;
+  const dims = P.dimsGrafico;
+  const colunas = dims.map((k, i) => `${exprDim(k)} AS g${i}`);
+  // com seleção: marca quais barras têm as linhas/barras clicadas (destaque)
+  const sel = P.selecao.size ? `bool_or(${[...P.selecao.values()].join(' OR ')})` : 'TRUE';
+  const linhas = await consultar(`SELECT ${colunas.length ? colunas.join(', ') + ',' : ''}
+      ${somaPeriodo(med, per.atual)} AS v, ${sel} AS sel, bool_or(is_el) AS el
+    FROM fato ${clausulaWhere(null)} ${colunas.length ? 'GROUP BY ALL' : ''}`);
+  P.grafico = linhas.map((l) => {
+    const valores = dims.map((_, i) => l['g' + i]);
+    return { valores, g: dims.length ? valores.join(' | ') : 'Total', v: l.v || 0, sel: l.sel, el: l.el };
+  });
+  desenharGraficoPareto();
+}
+
+function desenharGraficoPareto() {
+  const P = estado.par;
+  if (!P.grafico) return;
+  const per = periodoPareto();
+  const nomeMed = MEDIDAS_PARETO[$('par-medida').value];
+  $('titulo-pareto').textContent = `Pareto — ${nomeMed} ${per.rot}`;
+
+  // % acumulado sempre sobre todos os itens (na ordem do Pareto)
+  const todos = [...P.grafico].sort((a, b) => b.v - a.v);
+  const total = todos.reduce((s, i) => s + Math.max(0, i.v), 0);
+  let acum = 0;
+  for (const it of todos) {
+    it.classe = classePareto(total > 0 ? acum / total : 1);
+    acum += Math.max(0, it.v);
+    it.acum = total > 0 ? acum / total : null;
+    it.part = divisao(it.v, total);
+  }
+  const regra = aplicarExibicao(todos, P.exib, 'v');
+  const barras = regra.manter.map((it) => ({ ...it, nome: it.g }));
+  if (regra.outros.length) {
+    const v = regra.outros.reduce((s, i) => s + i.v, 0);
+    barras.push({
+      nome: 'Outros', outros: true, membros: regra.outros, v, part: divisao(v, total),
+      acum: regra.outros[regra.outros.length - 1].acum, sel: regra.outros.some((i) => i.sel), classe: '',
+    });
+  }
+  P.barras = barras;
+  const haSel = P.selecao.size > 0;
+  const cor = (b) => (b.outros ? COR_OUTROS_PARETO : COR_CLASSE[b.classe]);
+  const muitas = barras.length > 15;
+
+  // largura: barras com espaço mínimo; acima do card, rolagem horizontal
+  const el = $('grafico-pareto');
+  const disponivel = $('pareto-rolagem').clientWidth || 800;
+  el.style.width = Math.max(disponivel, 90 + barras.length * LARGURA_BARRA_PARETO) + 'px';
+  if (!estado.graficos['grafico-pareto']) {
+    estado.graficos['grafico-pareto'] = echarts.init(el);
+    const g = estado.graficos['grafico-pareto'];
+    g.on('click', (p) => {
+      if (p.componentType === 'series' && p.seriesType === 'bar') clicarBarraPareto(estado.par.barras[p.dataIndex], p.event && p.event.event && (p.event.event.ctrlKey || p.event.event.metaKey));
+    });
+    // nome completo ao passar o mouse no rótulo do eixo
+    g.on('mouseover', (e) => { if (e.componentType === 'xAxis') el.title = e.value; });
+    g.on('mouseout', (e) => { if (e.componentType === 'xAxis') el.title = ''; });
+  }
+  const grafico = estado.graficos['grafico-pareto'];
+  const curto = (s) => (String(s).length > 18 ? String(s).slice(0, 17) + '…' : s);
+  grafico.setOption({
+    animation: false,
+    tooltip: {
+      trigger: 'item',
+      formatter: (p) => {
+        const b = barras[p.dataIndex];
+        return `<b>${escaparHtml(b.nome)}</b>${b.el ? ' <span class="tag-el">EL</span>' : ''}<br>
+          ${nomeMed} ${per.rot}: <b>${inteiro(b.v)}</b><br>Participação: <b>${percentual(b.part)}</b><br>
+          % acumulado: <b>${percentual(b.acum)}</b><br>${b.outros ? `Outros: ${inteiro(b.membros.length)} itens` : `Classe: <b>${b.classe}</b>`}`;
+      },
+    },
+    grid: { left: 60, right: 50, top: 30, bottom: 110 },
+    xAxis: {
+      type: 'category', data: barras.map((b) => b.nome), triggerEvent: true,
+      axisLabel: { rotate: 45, fontSize: 10, interval: 0, formatter: curto },
+    },
+    yAxis: [
+      { type: 'value', max: (v) => v.max * 1.12, axisLabel: { formatter: abreviar } },
+      { type: 'value', min: 0, max: 100, interval: 20, splitLine: { show: false }, axisLabel: { formatter: (v) => v + '%' } },
+    ],
+    series: [
+      {
+        type: 'bar', barMaxWidth: 48, barCategoryGap: '20%',
+        data: barras.map((b) => ({
+          value: b.v,
+          itemStyle: { color: cor(b), opacity: haSel && !b.sel ? 0.3 : 1, borderColor: haSel && b.sel ? '#2B2B2B' : undefined, borderWidth: haSel && b.sel ? 1.5 : 0 },
+        })),
+        label: { show: true, position: 'top', fontSize: 10, color: '#2B2B2B', formatter: (p) => abreviar(p.value) },
+      },
+      {
+        type: 'line', yAxisIndex: 1, symbol: 'circle', symbolSize: 6, z: 5,
+        itemStyle: { color: '#2B2B2B' }, lineStyle: { color: '#2B2B2B', width: 2 },
+        data: barras.map((b, i) => ({
+          value: valido(b.acum) ? b.acum * 100 : null,
+          // para não poluir: com mais de 15 barras, rótulo a cada 2 pontos (e sempre no último)
+          label: { show: !muitas || i % 2 === 0 || i === barras.length - 1 },
+        })),
+        label: { position: 'top', fontSize: 9, color: '#2B2B2B', formatter: (p) => fmt1.format(p.value) + '%' },
+        tooltip: { show: false },
+        markLine: {
+          silent: true, symbol: 'none', lineStyle: { color: '#C0392B', type: 'dashed', width: 1.5 },
+          // rótulo no início da linha: continua visível com rolagem horizontal
+          label: { formatter: '80%', position: 'insideStartTop', color: '#C0392B', fontWeight: 'bold' },
+          data: [{ yAxis: 80 }],
+        },
+      },
+    ],
+  }, true);
+  grafico.resize();
+  const notas = [];
+  if (regra.escondidos) notas.push(`${inteiro(regra.escondidos)} itens fora do Top N não aparecem (o % acumulado considera todos).`);
+  if (!todos.length) notas.push('Nenhum dado com os filtros atuais.');
+  if (haSel) notas.push('Barras em destaque: linhas/barras clicadas (os cards consideram só elas).');
+  $('nota-grafico-par').textContent = notas.join(' ');
+}
+
+// Clique numa barra = clique na linha correspondente da tabela
+function clicarBarraPareto(barra, acumular) {
+  if (!barra) return;
+  const dims = estado.par.dimsGrafico;
+  const condItem = (it) => (dims.length ? '(' + it.valores.map((v, i) => `${exprDim(dims[i])} = ${sqlTexto(v)}`).join(' AND ') + ')' : 'TRUE');
+  const caminho = barra.outros ? 'graf' + SEP + '__outros__' : SEP + barra.valores.join(SEP);
+  const cond = barra.outros ? '(' + barra.membros.map(condItem).join(' OR ') + ')' : condItem(barra);
+  alternarSelecaoPareto(caminho, cond, acumular);
+}
+
+// ----- Tabela (matriz) -----
+// Part. %, % Acumulado e Classe: entre os itens do mesmo nível (sobre o total do nível acima)
+function marcarPareto(no) {
+  const filhos = [...no.filhos.values()].sort((a, b) => (b.v || 0) - (a.v || 0));
+  const total = filhos.reduce((s, f) => s + Math.max(0, f.v || 0), 0);
+  let acum = 0;
+  for (const f of filhos) {
+    f.classe = classePareto(total > 0 ? acum / total : 1);
+    acum += Math.max(0, f.v || 0);
+    f.acum = total > 0 ? acum / total : null;
+    f.part = divisao(f.v, total);
+    marcarPareto(f);
+  }
+}
+
+async function atualizarTabelaPareto() {
+  const P = estado.par;
+  const per = periodoPareto();
+  const med = $('par-medida').value;
+  const dims = P.dimsTabela;
+  const grupos = dims.map((k, i) => `${exprDim(k)} AS g${i}`);
+  const linhas = await consultar(`SELECT ${grupos.length ? grupos.join(', ') + ',' : ''}
+      ${somaPeriodo(med, per.atual)} v,
+      ${somaPeriodo('rcd', per.atual)} r0, ${somaPeriodo('rcd', per.ant)} r1, ${somaPeriodo('rcd', per.base)} r4,
+      ${somaPeriodo('und', per.atual)} u0, ${somaPeriodo('und', per.ant)} u1, ${somaPeriodo('und', per.base)} u4,
+      ${somaPeriodo('dos', per.atual)} d0, bool_or(is_el) AS el
+    FROM fato ${clausulaWhere(null)} ${grupos.length ? 'GROUP BY ALL' : ''}`);
+  const campos = [...CAMPOS_TABELA, 'v'];
+  const raiz = novoNo('Total', -1, '', []);
+  raiz.v = 0;
+  for (const l of linhas) {
+    let no = raiz;
+    somarCampos(raiz, l, campos);
+    dims.forEach((_, i) => {
+      const valor = l['g' + i];
+      let filho = no.filhos.get(valor);
+      if (!filho) {
+        filho = novoNo(valor, i, no.caminho + SEP + valor, [...no.valores, valor]);
+        filho.v = 0;
+        no.filhos.set(valor, filho);
+      }
+      somarCampos(filho, l, campos);
+      if (l.el) filho.el = true;
+      no = filho;
+    });
+  }
+  const completarTudo = (no) => { completarNo(no, raiz); no.filhos.forEach(completarTudo); };
+  completarTudo(raiz);
+  marcarPareto(raiz);
+  raiz.part = raiz.acum = 1;
+  P.tabela = { raiz, dims: [...dims], per, med };
+  desenharTabelaPareto();
+}
+
+// colunas da página Gráfico e Tabela + Part. % / % Acumulado / Classe depois da Medida
+function colunasPareto(per, med) {
+  const base = COLUNAS_TABELA(per.rot).filter((c) => !c.proj);
+  const extras = [
+    { id: 'part', titulo: 'Part. %', tipo: 'pct', cor: '#F2C94C' },
+    { id: 'acum', titulo: '% Acumulado', tipo: 'pct' },
+    { id: 'classe', titulo: 'Classe', tipo: 'classe' },
+  ];
+  const alvo = colunaMedidaPareto();
+  if (alvo === 'v') return [{ id: 'v', titulo: `${MEDIDAS_PARETO[med]} ${per.rot}`, tipo: 'num', cor: '#4FA3A5' }, ...extras, ...base];
+  const i = base.findIndex((c) => c.id === alvo);
+  return [...base.slice(0, i + 1), ...extras, ...base.slice(i + 1)];
+}
+
+function desenharTabelaPareto() {
+  const P = estado.par;
+  if (!P.tabela) return;
+  const { raiz, dims, per, med } = P.tabela;
+  const colunas = colunasPareto(per, med);
+  const { col, desc } = P.ordem;
+  const ultimoNivel = dims.length - 1;
+
+  const visiveis = [];
+  let escondidos = 0;
+  let cortou = false;
+  const percorrer = (no) => {
+    const regra = aplicarExibicao([...no.filhos.values()], P.exib, 'v');
+    escondidos += regra.escondidos;
+    const lista = regra.manter.sort((a, b) => {
+      if (col === 'nome') return (desc ? -1 : 1) * String(a.nome).localeCompare(String(b.nome), 'pt-BR');
+      if (col === 'classe') return (desc ? -1 : 1) * String(a.classe || 'Z').localeCompare(String(b.classe || 'Z'));
+      const va = valido(a[col]) ? a[col] : -Infinity;
+      const vb = valido(b[col]) ? b[col] : -Infinity;
+      return desc ? vb - va : va - vb;
+    });
+    if (regra.outros.length) {
+      const outros = novoNo('Outros', no.nivel + 1, no.caminho + SEP + '__outros__', no.valores);
+      outros.v = 0;
+      outros.ehOutros = true;
+      outros.membros = regra.outros.map((f) => f.nome);
+      for (const f of regra.outros) somarCampos(outros, f, [...CAMPOS_TABELA, 'v']);
+      completarNo(outros, raiz);
+      const total = [...no.filhos.values()].reduce((s, f) => s + Math.max(0, f.v || 0), 0);
+      outros.part = divisao(outros.v, total);
+      outros.acum = 1;
+      outros.classe = '';
+      lista.push(outros);
+    }
+    for (const f of lista) {
+      if (visiveis.length >= MAX_LINHAS_TABELA) { cortou = true; return; }
+      visiveis.push(f);
+      if (!f.ehOutros && f.nivel < ultimoNivel && P.expandidos.has(f.caminho)) percorrer(f);
+    }
+  };
+  if (dims.length) percorrer(raiz);
+
+  const maximos = {};
+  for (const l of visiveis) {
+    for (const c of colunas) {
+      if (!c.cor || l.ehOutros) continue;
+      const chave = c.id + '|' + l.nivel;
+      maximos[chave] = Math.max(maximos[chave] || 0, valido(l[c.id]) ? l[c.id] : 0);
+    }
+  }
+  const celula = (l, c, comBarra) => {
+    const v = l[c.id];
+    if (c.tipo === 'classe') {
+      return v ? `<td><span class="classe-pareto" style="background:${COR_CLASSE[v]};color:${corTexto(COR_CLASSE[v])}">${v}</span></td>` : '<td></td>';
+    }
+    const texto = c.tipo === 'num' ? inteiro(v) : percentual(v);
+    const classe = c.tipo === 'var' ? classeSinal(v) : '';
+    const max = maximos[c.id + '|' + l.nivel];
+    if (comBarra && c.cor && max > 0 && valido(v) && v > 0) {
+      const largura = Math.min(100, (v / max) * 100);
+      return `<td class="cel-barra ${classe}"><div class="barra" style="width:${largura}%;background:${c.cor}"></div><span>${texto}</span></td>`;
+    }
+    return `<td class="${classe}">${texto}</td>`;
+  };
+
+  const seta = (id) => (col === id ? (desc ? ' ▼' : ' ▲') : '');
+  const titulo = dims.length ? dims.map(rotuloDim).join(' › ') : '(sem dimensão)';
+  const cabecalho = `<thead><tr>
+      <th data-col="nome" class="${col === 'nome' ? 'ordenada' : ''}">${escaparHtml(titulo)}${seta('nome')}</th>
+      ${colunas.map((c) => `<th data-col="${c.id}" class="${col === c.id ? 'ordenada' : ''}">${c.titulo}${seta(c.id)}</th>`).join('')}
+    </tr></thead>`;
+
+  const haSelecao = P.selecao.size > 0;
+  const selecionada = (caminho) => [...P.selecao.keys()].some((c) => caminho === c || caminho.startsWith(c + SEP));
+  P.linhas = visiveis;
+  const corpo = '<tbody>' + visiveis.map((l, i) => {
+    const podeAbrir = !l.ehOutros && l.nivel < ultimoNivel;
+    const aberto = P.expandidos.has(l.caminho);
+    const botao = podeAbrir
+      ? `<button class="btn-exp" data-i="${i}" title="${aberto ? 'Recolher' : 'Expandir'}">${aberto ? '−' : '+'}</button>`
+      : '<span class="btn-exp-vazio"></span>';
+    const classes = [`nivel-${Math.min(l.nivel, 3)}`];
+    if (l.ehOutros) classes.push('linha-outros');
+    if (haSelecao) classes.push(P.selecao.has(l.caminho) ? 'selecionada' : selecionada(l.caminho) ? '' : 'apagada');
+    return `<tr class="${classes.join(' ')}" data-i="${i}">
+      <td style="padding-left:${8 + l.nivel * 20}px">${botao}${escaparHtml(l.nome)}${l.el ? '<span class="tag-el">EL</span>' : ''}</td>
+      ${colunas.map((c) => celula(l, c, true)).join('')}</tr>`;
+  }).join('') + '</tbody>';
+  const rodape = `<tfoot><tr><td>Total</td>${colunas.map((c) => (c.tipo === 'classe' ? '<td></td>' : celula(raiz, c, false))).join('')}</tr></tfoot>`;
+
+  $('tabela-par').innerHTML = cabecalho + corpo + rodape;
+  $('btn-expandir-par').hidden = $('btn-recolher-par').hidden = dims.length < 2;
+  $('btn-limpar-selecao-par').hidden = !haSelecao;
+  $('dica-selecao-par').textContent = haSelecao
+    ? `${P.selecao.size} ${P.selecao.size > 1 ? 'itens selecionados filtram' : 'item selecionado filtra'} os cards e ficam em destaque no gráfico.`
+    : 'Clique em uma linha ou barra para destacar no gráfico e filtrar os cards (Ctrl+clique para várias).';
+  const notas = [];
+  if (cortou) notas.push(`Mostrando as primeiras ${inteiro(MAX_LINHAS_TABELA)} linhas.`);
+  if (escondidos) notas.push(`${inteiro(escondidos)} linhas fora do Top N não aparecem.`);
+  notas.push('Part. %, % Acumulado e Classe seguem a ordem do Pareto (maior para menor) entre os itens de cada nível. Classe A: até 80%; B: 80–95%; C: acima de 95%.');
+  $('nota-tabela-par').textContent = notas.join(' ');
+}
+
+function alternarSelecaoPareto(caminho, cond, acumular) {
+  const P = estado.par;
+  if (acumular) {
+    if (P.selecao.has(caminho)) P.selecao.delete(caminho);
+    else P.selecao.set(caminho, cond);
+  } else if (P.selecao.has(caminho) && P.selecao.size === 1) {
+    P.selecao.clear();
+  } else {
+    P.selecao = new Map([[caminho, cond]]);
+  }
+  aplicarSelecaoPareto();
+}
+function aplicarSelecaoPareto() {
+  desenharTabelaPareto();
+  atualizarKpisPareto();
+  atualizarGraficoPareto();
+}
+function limparSelecaoPareto(redesenhar = true) {
+  const tinha = estado.par.selecao.size > 0;
+  estado.par.selecao.clear();
+  if (redesenhar || tinha) aplicarSelecaoPareto();
+}
+
+function lerExibicaoPareto() {
+  const n = parseInt($('par-topn').value, 10);
+  const auto80 = $('par-80').checked;
+  estado.par.exib = { topN: Number.isFinite(n) && n > 0 ? n : null, outros: $('par-outros').checked, auto80 };
+  $('par-topn').disabled = auto80;
+  $('par-outros').disabled = auto80;
+  // gráfico e tabela mudam juntos; a seleção deixa de valer (os "Outros" mudam)
+  if (estado.par.selecao.size) { estado.par.selecao.clear(); atualizarKpisPareto(); atualizarGraficoPareto(); }
+  else desenharGraficoPareto();
+  desenharTabelaPareto();
+}
+
+// ligações dos controles
+['par-medida', 'par-periodo'].forEach((id) => $(id).addEventListener('change', () => {
+  if (id === 'par-medida') estado.par.ordem = { col: colunaMedidaPareto(), desc: true };
+  atualizarPareto();
+}));
+$('par-topn').addEventListener('input', lerExibicaoPareto);
+$('par-outros').addEventListener('change', lerExibicaoPareto);
+$('par-80').addEventListener('change', lerExibicaoPareto);
+$('btn-expandir-par').addEventListener('click', () => {
+  const P = estado.par;
+  if (!P.tabela) return;
+  const abrir = (no) => no.filhos.forEach((f) => {
+    if (f.nivel < P.tabela.dims.length - 1) { P.expandidos.add(f.caminho); abrir(f); }
+  });
+  abrir(P.tabela.raiz);
+  desenharTabelaPareto();
+});
+$('btn-recolher-par').addEventListener('click', () => { estado.par.expandidos = new Set(); desenharTabelaPareto(); });
+$('btn-limpar-selecao-par').addEventListener('click', () => limparSelecaoPareto());
+$('tabela-par').addEventListener('click', (e) => {
+  const P = estado.par;
+  const botao = e.target.closest('.btn-exp');
+  if (botao) {
+    const { caminho } = P.linhas[Number(botao.dataset.i)];
+    if (P.expandidos.has(caminho)) P.expandidos.delete(caminho); else P.expandidos.add(caminho);
+    desenharTabelaPareto();
+    return;
+  }
+  const th = e.target.closest('th');
+  if (th) {
+    const col = th.dataset.col;
+    P.ordem = P.ordem.col === col ? { col, desc: !P.ordem.desc } : { col, desc: col !== 'nome' && col !== 'classe' };
+    desenharTabelaPareto();
+    return;
+  }
+  const tr = e.target.closest('tbody tr');
+  if (tr) {
+    const linha = P.linhas[Number(tr.dataset.i)];
+    alternarSelecaoPareto(linha.caminho, condicaoLinha(linha, P.tabela.dims), e.ctrlKey || e.metaKey);
+  }
+});
 
 // =====================================================================
 // Lançamentos Mercado: só os produtos lançados no período escolhido,
@@ -3688,6 +4189,7 @@ const CHAVE_PAGINA = 'dashboard-farma:pagina';
 const PAGINAS = [
   ['filtros', 'Filtros'],
   ['analise', 'Gráfico e Tabela'],
+  ['pareto', 'Pareto'],
   ['lanc', 'Lançamentos Mercado'],
   ['preco', 'Preço'],
   ['preco2', 'Preço 2'],

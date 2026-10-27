@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dashboard de Mercado Farmacêutico</title>
   <!-- Ao publicar uma nova versão, atualize o número "?v=" nas duas linhas abaixo -->
-  <link rel="stylesheet" href="style.css?v=20261027-17">
+  <link rel="stylesheet" href="style.css?v=20261027-18">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
-  <script type="module" src="app.js?v=20261027-17"></script>
-  <script type="module" src="el.js?v=20261027-17"></script>
-  <script type="module" src="compilado.js?v=20261027-17"></script>
+  <script type="module" src="app.js?v=20261027-18"></script>
+  <script type="module" src="el.js?v=20261027-18"></script>
+  <script type="module" src="compilado.js?v=20261027-18"></script>
 </head>
 <body>
 
@@ -170,6 +170,74 @@
               <table id="tabela"></table>
             </div>
             <div id="nota-tabela"></div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Pareto -->
+    <main id="pagina-pareto" class="pagina" hidden>
+      <div class="barra-seletores">
+        <div class="seletor"><span>Gráfico</span><div class="dropdown" id="dd-grafico-par"></div></div>
+        <div class="seletor"><span>Tabela</span><div class="dropdown" id="dd-tabela-par"></div></div>
+        <label>Medida
+          <select id="par-medida">
+            <option value="rcd">RCD</option>
+            <option value="und">UND</option>
+            <option value="rc">RCON</option>
+            <option value="pf">RPF</option>
+          </select>
+        </label>
+        <label>Período
+          <select id="par-periodo">
+            <option value="MAT0">MAT</option>
+            <option value="MAT1">MAT-1</option>
+            <option value="MAT2">MAT-2</option>
+            <option value="MAT3">MAT-3</option>
+            <option value="MAT4">MAT-4</option>
+            <option value="YTD0">YTD</option>
+            <option value="MATP" hidden>MAT+1 (projetado)</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="layout-analise">
+        <aside class="coluna-kpis">
+          <div id="kpis-par"></div>
+          <div class="exibicao">
+            <div class="exibicao-titulo">Exibição</div>
+            <label>Top N <input type="number" id="par-topn" min="1" step="1" placeholder="tudo"></label>
+            <label class="caixa"><input type="checkbox" id="par-outros"> Agrupar o restante como Outros</label>
+            <label class="caixa"><input type="checkbox" id="par-80"> Aglutinar automaticamente (80% da Medida)</label>
+          </div>
+        </aside>
+        <div class="area-principal">
+          <div class="card-grafico">
+            <div class="cab-pareto">
+              <h3 id="titulo-pareto">Pareto</h3>
+              <div class="leg-pareto">
+                <span><i style="background:#6B76A6"></i>A (até 80%)</span>
+                <span><i style="background:#A58BDB"></i>B (80–95%)</span>
+                <span><i style="background:#D3D3D3"></i>C (acima de 95%)</span>
+                <span><i style="background:#5A5A5A"></i>Outros</span>
+                <span><i class="leg-linha"></i>% acumulado</span>
+                <span><i class="leg-80"></i>80%</span>
+              </div>
+            </div>
+            <div class="pareto-rolagem" id="pareto-rolagem"><div class="grafico grafico-pareto" id="grafico-pareto"></div></div>
+          </div>
+          <div id="nota-grafico-par"></div>
+          <div class="card-tabela">
+            <div class="barra-tabela">
+              <button class="botao-pequeno" id="btn-expandir-par">+ Expandir tudo</button>
+              <button class="botao-pequeno" id="btn-recolher-par">− Recolher tudo</button>
+              <button class="botao-pequeno botao-limpar" id="btn-limpar-selecao-par" hidden>✕ Limpar seleção</button>
+              <span id="dica-selecao-par"></span>
+            </div>
+            <div class="tabela-rolagem">
+              <table id="tabela-par"></table>
+            </div>
+            <div id="nota-tabela-par"></div>
           </div>
         </div>
       </div>

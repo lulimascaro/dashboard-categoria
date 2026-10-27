@@ -21,6 +21,13 @@ O único arquivo de dados aqui é `exemplo.csv`, com 200 linhas **fictícias**
 3. Na aba **Filtros**, marque o que quiser analisar. Os filtros valem para todas as abas.
 4. Na aba **Gráfico e Tabela**, escolha a dimensão do gráfico, da tabela e o período (MAT ou YTD).
 
+## Pareto
+
+A página **Pareto** ordena os itens (dimensão escolhida em "Gráfico") do maior para o menor pela
+Medida (RCD, UND, RCON ou RPF) no Período escolhido, com a linha de % acumulado e as classes
+A (até 80%), B (80–95%) e C (acima de 95%). A tabela tem as colunas da página Gráfico e Tabela mais
+Part. %, % Acumulado e Classe. Clicar numa linha ou barra destaca o item no gráfico e filtra os cards.
+
 ## Lançamentos Mercado
 
 A página **Lançamentos Mercado** mostra só os produtos lançados no período escolhido em
