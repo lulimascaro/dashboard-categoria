@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dashboard de Mercado Farmacêutico</title>
   <!-- Ao publicar uma nova versão, atualize o número "?v=" nas duas linhas abaixo -->
-  <link rel="stylesheet" href="style.css?v=20261027-4">
+  <link rel="stylesheet" href="style.css?v=20261027-5">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
-  <script type="module" src="app.js?v=20261027-4"></script>
+  <script type="module" src="app.js?v=20261027-5"></script>
 </head>
 <body>
 
@@ -52,6 +52,7 @@
         <button class="aba ativa" data-pagina="filtros">Filtros <span id="contador-filtros"></span></button>
         <button class="aba" data-pagina="analise">Gráfico e Tabela</button>
         <button class="aba" data-pagina="preco">Preço</button>
+        <button class="aba" data-pagina="preco2">Preço 2</button>
       </nav>
       <button class="botao-link" id="btn-trocar">Trocar arquivo</button>
     </header>
@@ -167,6 +168,42 @@
           <div id="grafico-preco"></div>
           <div class="tabela-preco-rolagem"><table id="tabela-preco"></table></div>
           <div id="preco-rodape"></div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Página 4: Preço 2 -->
+    <main id="pagina-preco2" class="pagina" hidden>
+      <div class="barra-seletores">
+        <div class="seletor"><span>Produto</span><div class="dropdown" id="dd-p2-produto"></div></div>
+        <div class="seletor"><span>Gráfico</span><div class="dropdown" id="dd-p2-apres"></div></div>
+        <div class="seletor" id="p2-tempo"><span>Tempo</span>
+          <input type="text" id="p2-ini-txt" class="caixa-mes" readonly>
+          <div class="duplo-slider">
+            <div id="p2-trilho" class="trilho"></div>
+            <input type="range" id="p2-ini" aria-label="Mês inicial">
+            <input type="range" id="p2-fim" aria-label="Mês final">
+          </div>
+          <input type="text" id="p2-fim-txt" class="caixa-mes" readonly>
+        </div>
+      </div>
+      <div class="layout-analise">
+        <aside class="coluna-kpis"><div id="kpis-p2"></div></aside>
+        <div class="area-principal">
+          <div id="p2-aviso"></div>
+          <div class="card-grafico" id="p2-mensal-card">
+            <h3 class="cab-rcd">Apresentação Desc Longa</h3>
+            <div id="p2-mensal-rolagem" class="rolagem-x"><div id="p2-mensal" class="grafico"></div></div>
+          </div>
+          <div class="card-p2-mats">
+            <div id="p2-legenda"></div>
+            <div class="p2-mats">
+              <div class="card-p2"><h3>PF</h3><div class="grafico-p2" id="p2-pf"></div></div>
+              <div class="card-p2"><h3>RCD</h3><div class="grafico-p2" id="p2-rcd"></div></div>
+              <div class="card-p2"><h3>RC</h3><div class="grafico-p2" id="p2-rc"></div></div>
+              <div class="card-p2"><h3>Desconto Comercial</h3><div class="grafico-p2" id="p2-desc"></div></div>
+            </div>
+          </div>
         </div>
       </div>
     </main>
