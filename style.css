@@ -374,3 +374,33 @@ body {
 .p3-card-legenda { height: auto; max-height: 790px; position: sticky; top: 10px; }
 #p3-legenda { flex: 1; overflow-y: auto; padding: 6px 4px; }
 @media (max-width: 980px) { .p3-grade { grid-template-columns: 1fr; } .p3-card-legenda { position: static; } }
+
+/* ---------- Correção de preço (Infoprice) ---------- */
+.card-ip { background: #fff; border-radius: 6px; padding: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.card-ip .aviso-privacidade { margin-bottom: 12px; }
+.ip-botoes { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.ip-botoes label.botao-pequeno { display: inline-block; }
+.ip-chave { display: flex; align-items: center; gap: 6px; font-weight: 600; cursor: pointer; margin-right: 8px; }
+.ip-chave input { width: 16px; height: 16px; accent-color: var(--azul); }
+#ip-erro { color: var(--vermelho); font-size: 13px; }
+#ip-erro:empty { display: none; }
+.ip-arquivos { margin: 0 0 6px; padding-left: 18px; font-size: 13px; }
+.ip-numeros { display: flex; gap: 22px; flex-wrap: wrap; font-size: 13px; margin-bottom: 8px; }
+.ip-off { color: var(--vermelho); }
+.ip-subtitulo { margin: 14px 0 2px; font-size: 14px; color: var(--azul); }
+.ip-dica { margin: 0 0 8px; font-size: 12px; color: #777; }
+.tabela-ip { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+.tabela-ip th { background: var(--cinza-escuro); color: #fff; text-align: left; padding: 6px 8px; }
+.tabela-ip th:nth-child(1) { width: 42%; }
+.tabela-ip th:nth-child(2) { width: 30%; }
+.tabela-ip th:nth-child(3) { width: 10%; }
+.tabela-ip td { padding: 4px 8px; border-bottom: 1px solid #EEE; vertical-align: middle; }
+.tabela-ip td.ip-col { word-break: break-word; }
+.tabela-ip .dd-largo { width: 100%; }
+.tabela-ip tr.ip-baixa td { background: #FFF4CC; }
+sup.ip {
+  font-size: 8px; font-weight: 700; color: #fff; background: var(--vermelho);
+  border-radius: 3px; padding: 0 3px; margin-left: 3px; vertical-align: super;
+}
+.nota-ip { font-size: 12px; color: #666; }
+.nota-ip:empty { display: none; }

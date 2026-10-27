@@ -296,6 +296,7 @@ async function carregarArquivo(arquivo) {
     });
     selects.push(`${qtd} AS qtdnum`);
     estado.meses = meses.map(rotuloMes);
+    estado.mesesObj = meses;
 
     mostrarProgresso('Processando os números (pode levar alguns segundos em arquivos grandes)…', 0.65);
     await estado.conn.query(`CREATE OR REPLACE TABLE fato AS
@@ -307,6 +308,12 @@ async function carregarArquivo(arquivo) {
     await estado.db.dropFile(nomeInterno);
     estado.arquivoAtual = null;
 
+    // número de cada linha + cópia do RC original (para ligar/desligar a correção Infoprice)
+    await estado.conn.query('CREATE OR REPLACE TABLE fato AS SELECT row_number() OVER () AS rid, * FROM fato');
+    estado.colunasRc = [...Object.keys(periodos).map((p) => `rc_${p}`), ...meses.map((_, i) => `rc_m${i}`)];
+    await estado.conn.query(`CREATE OR REPLACE TABLE rc_orig AS SELECT rid, ${estado.colunasRc.join(', ')} FROM fato`);
+    estado.periodosRc = Object.keys(periodos);
+
     const [{ n }] = await consultar('SELECT count(*) AS n FROM fato');
     if (!n) throw new Error('Nenhuma linha com Medida "RCD" ou "Unidades" foi encontrada no arquivo.');
 
@@ -317,6 +324,8 @@ async function carregarArquivo(arquivo) {
     $('info-arquivo').textContent = info;
 
     prepararInterface();
+    // arquivos Infoprice já carregados valem também para a nova base
+    if (estado.ip.arquivos.length) await reprocessarInfoprice();
     await atualizarTudo();
     mostrarProgresso('Pronto!', 1);
     $('tela-inicial').hidden = true;
@@ -1481,6 +1490,7 @@ async function atualizarPreco() {
     GROUP BY 1`);
 
   // cálculos por apresentação
+  const mesesPeriodo = indicesPeriodoPreco();
   const porUnidade = (v, und) => (valido(v) && v !== 0 && und > 0 ? v / und : null);
   for (const a of linhas) {
     a.rcdU = porUnidade(a.rcd, a.und);
@@ -1491,6 +1501,7 @@ async function atualizarPreco() {
     a.mkup = a.rcU !== null && a.rcdU ? a.rcU / a.rcdU - 1 : null;
     a.rcDose = a.rcU !== null && a.qtdnum > 0 ? a.rcU / a.qtdnum : null;
     a.ehIndex = a.apres === index;
+    a.ip = temIP(a.apres, mesesPeriodo); // RC corrigido com Infoprice em algum mês do período
   }
   const idx = linhas.find((a) => a.ehIndex);
   const concIdx = lerConcentracao(idx.conc);
@@ -1612,7 +1623,7 @@ function desenharPreco() {
             const w = api.size([1, 0])[0] * 0.7;
             filhos.push({ type: 'line', shape: { x1: x - w / 2, y1: yRC, x2: x + w / 2, y2: yRC }, style: { stroke: COR_RC, lineWidth: 3 } });
             filhos.push({ type: 'text', x, y: baseRC,
-              style: { text: reais(a.rcU), fill: COR_RC, font: `bold ${tamanho + 1}px sans-serif`, textAlign: 'center', textVerticalAlign: 'bottom' } });
+              style: { text: reais(a.rcU) + (a.ip && valido(a.rcU) ? ' IP' : ''), fill: COR_RC, font: `bold ${tamanho + 1}px sans-serif`, textAlign: 'center', textVerticalAlign: 'bottom' } });
           }
           if (temPF) {
             filhos.push({ type: 'text', x, y: basePF,
@@ -1631,13 +1642,13 @@ function desenharPreco() {
   const linhasTabela = [
     ['RCD (R$/UND)', (a) => reais(a.rcdU)],
     ['PF (R$/UND)', (a) => reais(a.pfU)],
-    ['RC (R$/UND)', (a) => reais(a.rcU), 'v-rc'],
+    ['RC (R$/UND)', (a) => reais(a.rcU) + marcaIP(a.ip && valido(a.rcU)), 'v-rc'],
     ['Desc. Com.', (a) => pct(a.desc), ''],
     ['Margem PDV', (a) => pct(a.margem)],
     ['MKUP DIST', (a) => pct(a.mkup)],
     [`Index RC vs ${nomeCurto(idx)}`, (a) => (valido(a.indexRc) ? fmt0.format(a.indexRc) : '-'), 'v-index'],
-    ['RC por dose', (a) => reais(a.rcDose), 'v-rc'],
-    [`RC por ${concIdxTexto}`, (a) => reais(a.rcConc), 'v-rc'],
+    ['RC por dose', (a) => reais(a.rcDose) + marcaIP(a.ip && valido(a.rcDose)), 'v-rc'],
+    [`RC por ${concIdxTexto}`, (a) => reais(a.rcConc) + marcaIP(a.ip && valido(a.rcConc)), 'v-rc'],
     [`UND ${periodo.curto} (mil)`, (a) => (a.und > 0 ? fmt1.format(a.und / 1000) : '-')],
   ];
   const cabecalho = `<thead><tr><th class="preco-rotulo">Apresentação</th>${itens.map((a) => `
@@ -1652,7 +1663,17 @@ function desenharPreco() {
 
   $('preco-rodape').innerHTML = `Período: <b>${escaparHtml(periodo.longo)}</b>.
     Preço médio ponderado = soma do valor no período ÷ soma das unidades (UND) no período.
-    ${total > itens.length ? `Mostrando ${itens.length} de ${total} apresentações.` : ''}`;
+    ${total > itens.length ? `Mostrando ${itens.length} de ${total} apresentações.` : ''}
+    ${itens.some((a) => a.ip) ? `<br>${marcaIP(true)} ${NOTA_IP}.` : ''}`;
+}
+
+// meses (índices) do período escolhido na aba Preço
+function indicesPeriodoPreco() {
+  const p = $('preco-periodo').value;
+  if (p === 'MAT' || p === 'YTD') return indicesJanela(p, 0);
+  const n = estado.meses.length;
+  const k = Math.min(Number(p), n);
+  return Array.from({ length: k }, (_, j) => n - k + j);
 }
 
 ['preco-periodo', 'preco-ordem'].forEach((id) => $(id).addEventListener('change', atualizarPreco));
@@ -1783,7 +1804,7 @@ async function atualizarPreco2() {
   const porApres = await consultar(`SELECT d_apres AS apres, ${somasMat} FROM fato ${whereSel} GROUP BY 1`);
   porApres.sort((a, b) => todas.indexOf(a.apres) - todas.indexOf(b.apres));
 
-  estado.p2.dados = { mensal, porApres, cores };
+  estado.p2.dados = { mensal, porApres, cores, apresUsadas: s.apres.valores.size ? [...s.apres.valores] : todas };
   desenharPreco2();
 }
 
@@ -1801,6 +1822,12 @@ function desenharPreco2() {
   if (!d) return;
   desenharMensalP2(d.mensal);
   desenharMatsP2(d.porApres, d.cores);
+  // nota do Infoprice quando algum RC mostrado veio de lá
+  const { ini, fim } = estado.tempo;
+  const meses = Array.from({ length: Math.max(0, fim - ini + 1) }, (_, j) => ini + j);
+  const mesesMats = [0, 1, 2, 3, 4].flatMap((k) => indicesJanela('MAT', k));
+  const usou = d.apresUsadas.some((a) => temIP(a, meses)) || d.porApres.some((a) => temIP(a.apres, mesesMats));
+  $('p2-nota-ip').innerHTML = usou ? `${marcaIP(true)} ${NOTA_IP}.` : '';
 }
 
 function desenharMensalP2(mensal) {
@@ -1810,12 +1837,14 @@ function desenharMensalP2(mensal) {
   }
   $('p2-mensal-card').hidden = false;
   const { ini, fim } = estado.tempo;
-  const meses = mensal.slice(ini, fim + 1).map((m) => {
+  const apresUsadas = estado.p2.dados.apresUsadas;
+  const meses = mensal.slice(ini, fim + 1).map((m, j) => {
     const rcdU = precoMedio(m.rcd, m.und);
     const rcU = precoMedio(m.rc, m.und);
     const pfU = precoMedio(m.pf, m.und);
     const dif = rcdU !== null && rcU !== null && rcU - rcdU > 0 ? rcU - rcdU : null;
-    return { mes: m.mes, rcdU, rcU, pfU, dif, desc: rcdU !== null && pfU !== null ? 1 - rcdU / pfU : null };
+    const ip = apresUsadas.some((a) => temIP(a, [ini + j]));
+    return { mes: m.mes, rcdU, rcU, pfU, dif, ip, desc: rcdU !== null && pfU !== null ? 1 - rcdU / pfU : null };
   });
 
   // largura do gráfico: muitos meses => rolagem horizontal
@@ -1838,7 +1867,7 @@ function desenharMensalP2(mensal) {
       trigger: 'axis', axisPointer: { type: 'shadow' },
       formatter: (ps) => {
         const m = meses[ps[0].dataIndex];
-        return `<b>${m.mes}</b><br>RCD/UND: ${reais(m.rcdU)}<br>PF/UND: ${reais(m.pfU)}<br>RC/UND: ${reais(m.rcU)}<br>Dif RC-RCD: ${reais(m.rcU !== null && m.rcdU !== null ? m.rcU - m.rcdU : null)}<br>Desc. Com.: ${percentual(m.desc)}`;
+        return `<b>${m.mes}</b><br>RCD/UND: ${reais(m.rcdU)}<br>PF/UND: ${reais(m.pfU)}<br>RC/UND: ${reais(m.rcU)}${m.ip ? ' (Infoprice)' : ''}<br>Dif RC-RCD: ${reais(m.rcU !== null && m.rcdU !== null ? m.rcU - m.rcdU : null)}<br>Desc. Com.: ${percentual(m.desc)}`;
       },
     },
     grid: { left: 60, right: 60, top: 44, bottom: 50 },
@@ -1861,7 +1890,7 @@ function desenharMensalP2(mensal) {
       {
         name: 'Dif RC-RCD', type: 'bar', stack: 'p2', itemStyle: { color: COR_DIF_CLARO },
         data: meses.map((m) => m.dif),
-        label: { show: true, position: 'top', fontSize: 9, color: '#2B2B2B', formatter: (p) => fmt1.format(meses[p.dataIndex].rcU) },
+        label: { show: true, position: 'top', fontSize: 9, color: '#2B2B2B', formatter: (p) => fmt1.format(meses[p.dataIndex].rcU) + (meses[p.dataIndex].ip ? ' IP' : '') },
       },
       {
         name: 'Desc. Com.', type: 'scatter', yAxisIndex: 1, symbolSize: 9,
@@ -1903,8 +1932,8 @@ function desenharMatsP2(porApres, cores) {
         symbol: 'rect', symbolSize: 7,
         itemStyle: { color: cores[a.apres] },
         lineStyle: { type: 'dotted', width: 2, color: cores[a.apres] },
-        data: ks.map((k) => calc[id](a, k)),
-        label: { show: true, position: 'top', fontSize: 9, color: cores[a.apres], formatter: (p) => fmt(p.value) },
+        data: ks.map((k) => ({ value: calc[id](a, k), ip: id === 'p2-rc' && temIP(a.apres, indicesJanela('MAT', k)) })),
+        label: { show: true, position: 'top', fontSize: 9, color: cores[a.apres], formatter: (p) => fmt(p.value) + (p.data.ip ? ' IP' : '') },
       })),
     }, true);
     g.resize();
@@ -2056,6 +2085,10 @@ function desenharPreco3() {
   const selecionadas = Object.fromEntries(d.series.map((s) => [s.apres, !estado.p3.ocultas.has(s.apres)]));
   const eixoX = { type: 'category', data: rotulosX, axisLabel: { rotate: 90, fontSize: 10, interval: 0 } };
   const fmtValor = (v) => (medida1.pct ? percentual(v) : fmt2.format(v));
+  // medidas que dependem do RC recebem a marca "IP" nos meses corrigidos
+  const usaRC = ['rc', 'margem', 'mkup'].includes($('p3-medida1').value);
+  const meses3 = Array.from({ length: fim - ini + 1 }, (_, j) => ini + j);
+  $('p3-nota-ip').innerHTML = usaRC && d.series.some((s) => temIP(s.apres, meses3)) ? `${marcaIP(true)} ${NOTA_IP}.` : '';
 
   // ----- Gráfico 01: preço médio mensal por apresentação -----
   const g1 = graficoP3('p3-g1');
@@ -2065,7 +2098,7 @@ function desenharPreco3() {
     legend: { show: false, data: d.series.map((s) => s.apres), selected: selecionadas },
     tooltip: {
       trigger: 'item',
-      formatter: (p) => `${escaparHtml(p.seriesName)}<br>${p.name}: <b>${medida1.pct ? percentual(p.value) : reais(p.value)}</b>`,
+      formatter: (p) => `${escaparHtml(p.seriesName)}<br>${p.name}: <b>${medida1.pct ? percentual(p.value) : reais(p.value)}</b>${p.data.ip ? ' (RC Infoprice)' : ''}`,
     },
     grid: { left: 64, right: 24, top: 24, bottom: 50 },
     labelLayout: { hideOverlap: true, moveOverlap: 'shiftY' },
@@ -2080,8 +2113,8 @@ function desenharPreco3() {
       return {
         name: s.apres, type: 'line', connectNulls: false, symbolSize: 5,
         itemStyle: { color: d.cores[s.apres] }, lineStyle: { width: 2 },
-        data: valores.map((v, i) => ({ value: v, label: { show: chave.has(i) } })),
-        label: { position: 'top', fontSize: 10, color: d.cores[s.apres], fontWeight: 'bold', formatter: (p) => fmtValor(p.value) },
+        data: valores.map((v, i) => ({ value: v, label: { show: chave.has(i) }, ip: usaRC && valido(v) && temIP(s.apres, [ini + i]) })),
+        label: { position: 'top', fontSize: 10, color: d.cores[s.apres], fontWeight: 'bold', formatter: (p) => fmtValor(p.value) + (p.data.ip ? ' IP' : '') },
       };
     }),
   }, true);
@@ -2128,3 +2161,452 @@ $('p3-legenda').addEventListener('click', (e) => {
 });
 ['p3-medida1', 'p3-medida2'].forEach((id) => $(id).addEventListener('change', desenharPreco3));
 window.addEventListener('resize', () => { if (estado.pagina === 'preco3') desenharPreco3(); });
+
+// =====================================================================
+// Correção de preço com Infoprice
+// Os arquivos são lidos só neste navegador; nada é enviado ou salvo no site.
+// =====================================================================
+const NOTA_IP = 'RC corrigido com Infoprice (média semanal → mensal) nos meses disponíveis; demais meses: base RM';
+const SEM_CORRESPONDENCIA = '— Sem correspondência —';
+const CHAVE_DEPARA = 'dashboard-farma:depara-infoprice';
+const CONFIANCA_BAIXA = 70; // abaixo disso a sugestão fica amarela
+const CONFIANCA_MINIMA = 45; // abaixo disso a sugestão vira "Sem correspondência"
+const PALAVRAS_IGNORADAS = new Set(['LTDA', 'SA', 'S', 'A', 'DO', 'DA', 'DE', 'DOS', 'DAS', 'E', 'IND', 'COM',
+  'LAB', 'LABS', 'LABORATORIO', 'LABORATORIOS', 'FARMACEUTICA', 'FARMACEUTICO', 'FARMA', 'PHARMA', 'BRASIL', 'UN']);
+
+estado.ip = {
+  arquivos: [],        // { nome, modificado, semanas: [{ data, lojas, redes, precos: {coluna: valor} }] }
+  colunas: [],         // nomes das colunas de SKU (Infoprice)
+  mapa: {},            // coluna -> { apres: string|'' , confianca, status: 'auto'|'manual'|'salvo' }
+  candidatos: [],      // apresentações da base RM, com campos prontos para comparar
+  usar: true,
+  corrigidos: new Map(), // apresentação -> Set(índices de mês corrigidos)
+  aplicado: false,
+};
+
+// ----- utilidades -----
+const textoLimpo = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .toUpperCase().replace(/\s+/g, ' ').trim();
+const semEspaco = (s) => textoLimpo(s).replace(/[^A-Z0-9]/g, '');
+
+// semelhança entre dois textos (0 a 1), por pares de letras
+function bigramas(s) {
+  const t = semEspaco(s);
+  const m = new Map();
+  for (let i = 0; i < t.length - 1; i++) { const b = t.slice(i, i + 2); m.set(b, (m.get(b) || 0) + 1); }
+  return { m, n: Math.max(0, t.length - 1), t };
+}
+function semelhanca(a, b) {
+  if (!a.n || !b.n) return a.t && a.t === b.t ? 1 : 0;
+  if (a.t === b.t) return 1;
+  let comuns = 0;
+  for (const [k, v] of a.m) comuns += Math.min(v, b.m.get(k) || 0);
+  return (2 * comuns) / (a.n + b.n);
+}
+
+// leitor de CSV simples (aspas, vírgulas dentro de aspas, quebras de linha \r\n)
+function lerCsv(texto, sep) {
+  const linhas = [];
+  let linha = [], campo = '', aspas = false;
+  for (let i = 0; i < texto.length; i++) {
+    const c = texto[i];
+    if (aspas) {
+      if (c === '"') { if (texto[i + 1] === '"') { campo += '"'; i++; } else aspas = false; } else campo += c;
+    } else if (c === '"') aspas = true;
+    else if (c === sep) { linha.push(campo); campo = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && texto[i + 1] === '\n') i++;
+      linha.push(campo); campo = '';
+      if (linha.some((x) => x !== '')) linhas.push(linha);
+      linha = [];
+    } else campo += c;
+  }
+  linha.push(campo);
+  if (linha.some((x) => x !== '')) linhas.push(linha);
+  return linhas;
+}
+
+// "PRODUTO (MOLÉCULA) 1000MCG COMPRIMIDO FABRICANTE 30 UN" -> partes para comparar
+function analisarNomeIP(nome) {
+  const t = textoLimpo(nome);
+  let marca = null, molecula, resto;
+  const m = t.match(/^(.*?)\s*\(([^)]*)\)\s*(.*)$/);
+  if (m) { marca = m[1].trim(); molecula = m[2].trim(); resto = m[3]; } else {
+    // sem marca: a molécula vai até o primeiro número (a concentração)
+    const k = t.search(/\d/);
+    molecula = (k > 0 ? t.slice(0, k) : t).trim();
+    resto = k > 0 ? t.slice(k) : '';
+  }
+  const conc = resto.match(/(\d+(?:[.,]\d+)?)\s*(MCG|MG|G|ML|UI|FCC|%|MEQ|UFC)?/);
+  const qtd = t.match(/(\d+(?:[.,]\d+)?)\s*UN\s*$/);
+  return {
+    marca, molecula,
+    conc: conc ? parseFloat(conc[1].replace(',', '.')) : null,
+    qtd: qtd ? parseFloat(qtd[1].replace(',', '.')) : null,
+    palavras: new Set(t.split(/[^A-Z0-9]+/).filter((w) => w.length >= 3 && !PALAVRAS_IGNORADAS.has(w))),
+    bMarca: marca ? bigramas(marca) : null,
+    bMol: bigramas(molecula),
+  };
+}
+
+// ----- de-para salvo no navegador (só neste computador) -----
+function lerDeparaSalvo() {
+  try { return JSON.parse(localStorage.getItem(CHAVE_DEPARA) || '{}') || {}; } catch { return {}; }
+}
+function salvarDepara() {
+  const salvo = lerDeparaSalvo();
+  for (const [col, m] of Object.entries(estado.ip.mapa)) {
+    if (m.status === 'manual' || m.status === 'salvo') salvo[col] = m.apres;
+  }
+  try { localStorage.setItem(CHAVE_DEPARA, JSON.stringify(salvo)); } catch { /* navegador sem armazenamento: segue sem salvar */ }
+}
+
+// ----- leitura dos arquivos -----
+async function lerArquivoIP(arquivo) {
+  let texto = await arquivo.text();
+  if (texto.charCodeAt(0) === 0xFEFF) texto = texto.slice(1);
+  const linhas = lerCsv(texto, ',');
+  if (linhas.length < 2) throw new Error(`"${arquivo.name}" está vazio.`);
+  const cab = linhas[0].map((c) => c.trim());
+  const iTempo = cab.findIndex((c) => normalizar(c) === 'tempo');
+  if (iTempo < 0) throw new Error(`"${arquivo.name}" não tem a coluna "TEMPO".`);
+  const iLojas = cab.findIndex((c) => normalizar(c) === 'lojas');
+  const iRedes = cab.findIndex((c) => normalizar(c) === 'redes');
+  const skus = cab.map((c, i) => [c, i]).filter(([c, i]) => c && i !== iTempo && i !== iLojas && i !== iRedes);
+  const num = (v) => { const x = parseFloat(String(v).trim()); return Number.isFinite(x) ? x : null; };
+  const semanas = [];
+  for (const l of linhas.slice(1)) {
+    const d = String(l[iTempo] || '').match(/(\d{4})-(\d{2})-(\d{2})/);
+    if (!d) continue;
+    const precos = {};
+    for (const [c, i] of skus) { const v = num(l[i]); if (v !== null && v > 0) precos[c] = v; }
+    semanas.push({ data: `${d[1]}-${d[2]}-${d[3]}`, ano: +d[1], mes: +d[2],
+      lojas: iLojas >= 0 ? num(l[iLojas]) : null, redes: iRedes >= 0 ? num(l[iRedes]) : null, precos });
+  }
+  return { nome: arquivo.name, modificado: arquivo.lastModified || Date.now(), ordem: Date.now(), semanas, colunas: skus.map(([c]) => c) };
+}
+
+async function carregarArquivosIP(arquivos) {
+  $('ip-erro').textContent = '';
+  try {
+    for (const a of arquivos) {
+      const lido = await lerArquivoIP(a);
+      // mesmo nome de arquivo: substitui o anterior
+      estado.ip.arquivos = estado.ip.arquivos.filter((x) => x.nome !== lido.nome);
+      estado.ip.arquivos.push(lido);
+    }
+    estado.ip.usar = true;
+    $('ip-usar').checked = true;
+    await reprocessarInfoprice();
+  } catch (e) {
+    console.error(e);
+    $('ip-erro').textContent = 'Não foi possível ler o arquivo Infoprice: ' + (e.message || e);
+  }
+}
+
+// junta os arquivos: mesmo SKU + mesma semana => vale o arquivo mais recente
+function juntarSemanas() {
+  const porColuna = new Map(); // coluna -> Map(data -> { v, rank })
+  const rank = (a) => [a.modificado, a.ordem];
+  const maisNovo = (x, y) => x[0] > y[0] || (x[0] === y[0] && x[1] >= y[1]);
+  for (const a of estado.ip.arquivos) {
+    const r = rank(a);
+    for (const s of a.semanas) {
+      for (const [col, v] of Object.entries(s.precos)) {
+        if (!porColuna.has(col)) porColuna.set(col, new Map());
+        const m = porColuna.get(col);
+        const atual = m.get(s.data);
+        if (!atual || maisNovo(r, atual.rank)) m.set(s.data, { v, rank: r, ano: s.ano, mes: s.mes });
+      }
+    }
+  }
+  return porColuna;
+}
+
+// semanal -> mensal: média simples das semanas de cada mês (índice do mês na base RM)
+function precosMensais(porColuna) {
+  const idxMes = new Map((estado.mesesObj || []).map((m, i) => [m.ano * 12 + m.mes - 1, i]));
+  const mensal = new Map(); // coluna -> Map(índice do mês -> preço)
+  for (const [col, semanas] of porColuna) {
+    const soma = new Map();
+    for (const s of semanas.values()) {
+      const i = idxMes.get(s.ano * 12 + s.mes - 1);
+      if (i === undefined) continue;
+      const x = soma.get(i) || [0, 0];
+      soma.set(i, [x[0] + s.v, x[1] + 1]);
+    }
+    mensal.set(col, new Map([...soma].map(([i, [t, n]]) => [i, t / n])));
+  }
+  return mensal;
+}
+
+// ----- sugestão automática -----
+async function carregarCandidatos() {
+  const linhas = await consultar(`SELECT d_apres AS apres, any_value(d_produto) AS produto, any_value(d_molecula) AS molecula,
+      any_value(d_conc) AS conc, any_value(qtdnum) AS qtdnum, any_value(d_lab) AS lab, any_value(d_corp) AS corp
+    FROM fato GROUP BY 1`);
+  estado.ip.candidatos = linhas.map((c) => {
+    const conc = lerConcentracao(c.conc);
+    return {
+      apres: c.apres, bProd: bigramas(c.produto), bMol: bigramas(c.molecula),
+      conc: conc ? conc.valor : null, qtd: valido(c.qtdnum) ? c.qtdnum : null,
+      fab: new Set(textoLimpo(`${c.lab} ${c.corp}`).split(/[^A-Z0-9]+/).filter((w) => w.length >= 3 && !PALAVRAS_IGNORADAS.has(w))),
+    };
+  });
+  estado.ip.listaApres = [SEM_CORRESPONDENCIA, ...linhas.map((c) => c.apres).sort(ordemApresentacao)];
+}
+
+// nota de 0 a 100: nome (40) + molécula (15) + concentração (20) + quantidade (15) + fabricante (10)
+function pontuar(ip, c) {
+  let nome, mol;
+  if (ip.bMarca) {
+    nome = semelhanca(ip.bMarca, c.bProd);
+    mol = semelhanca(ip.bMol, c.bMol);
+  } else {
+    // sem marca: compara a molécula com o produto e com a molécula da base
+    nome = Math.max(semelhanca(ip.bMol, c.bProd), semelhanca(ip.bMol, c.bMol));
+    mol = semelhanca(ip.bMol, c.bMol);
+  }
+  let pontos = 40 * nome + 15 * mol;
+  if (ip.conc !== null && c.conc !== null && Math.abs(ip.conc - c.conc) < 1e-9) pontos += 20;
+  if (ip.qtd !== null && c.qtd !== null && Math.abs(ip.qtd - c.qtd) < 1e-9) pontos += 15;
+  for (const w of c.fab) if (ip.palavras.has(w)) { pontos += 10; break; }
+  return pontos;
+}
+
+function sugerir(coluna) {
+  const ip = analisarNomeIP(coluna);
+  const notas = estado.ip.candidatos.map((c) => [pontuar(ip, c), c.apres]).sort((a, b) => b[0] - a[0]);
+  const [melhor, segundo] = notas;
+  if (!melhor) return { apres: '', confianca: 0, ranking: [] };
+  let confianca = Math.round(melhor[0]);
+  if (segundo && melhor[0] - segundo[0] < 3) confianca = Math.max(0, confianca - 15); // empate: ambíguo
+  return {
+    apres: confianca >= CONFIANCA_MINIMA ? melhor[1] : '',
+    confianca,
+    ranking: notas.slice(0, 8).map((n) => n[1]),
+  };
+}
+
+// refaz o de-para (salvos primeiro, depois sugestões) e aplica a correção
+async function reprocessarInfoprice() {
+  const colunas = [...new Set(estado.ip.arquivos.flatMap((a) => a.colunas))];
+  estado.ip.colunas = colunas;
+  await carregarCandidatos();
+  const salvo = lerDeparaSalvo();
+  const existe = new Set(estado.ip.listaApres);
+  const anterior = estado.ip.mapa;
+  estado.ip.mapa = {};
+  estado.ip.rankings = {};
+  for (const col of colunas) {
+    const sug = sugerir(col);
+    estado.ip.rankings[col] = sug.ranking;
+    const antes = anterior[col];
+    if (antes && antes.status === 'manual' && (antes.apres === '' || existe.has(antes.apres))) estado.ip.mapa[col] = antes;
+    else if (col in salvo && (salvo[col] === '' || existe.has(salvo[col]))) estado.ip.mapa[col] = { apres: salvo[col], confianca: sug.confianca, status: 'salvo' };
+    else estado.ip.mapa[col] = { apres: sug.apres, confianca: sug.confianca, status: 'auto' };
+  }
+  desenharSecaoIP();
+  await aplicarInfoprice();
+}
+
+// ----- aplicação da correção no banco de dados -----
+// janelas de meses (índices) de cada período MAT-k / YTD-k
+function indicesJanela(tipo, k) {
+  const meses = estado.mesesObj || [];
+  if (!meses.length) return [];
+  const ultimo = meses[meses.length - 1];
+  const r = [];
+  meses.forEach((m, i) => {
+    if (tipo === 'MAT') { const fim = ultimo.indice - 12 * k; if (m.indice > fim - 12 && m.indice <= fim) r.push(i); }
+    else if (m.ano === ultimo.ano - k && m.mes <= ultimo.mes) r.push(i);
+  });
+  return r;
+}
+
+async function aplicarInfoprice() {
+  const conn = estado.conn;
+  const sets = estado.colunasRc.map((c) => `${c} = o.${c}`).join(', ');
+  // 1) volta ao RC original da base RM
+  if (estado.ip.aplicado) {
+    await conn.query(`UPDATE fato SET ${sets} FROM rc_orig o WHERE fato.rid = o.rid`);
+    estado.ip.aplicado = false;
+  }
+  estado.ip.corrigidos = new Map();
+  const n = estado.meses.length;
+  if (estado.ip.usar && n && estado.ip.arquivos.length) {
+    // 2) preço mensal por apresentação (média das colunas Infoprice ligadas a ela)
+    const mensal = precosMensais(juntarSemanas());
+    const porApres = new Map();
+    for (const [col, m] of Object.entries(estado.ip.mapa)) {
+      if (!m.apres || !mensal.has(col)) continue;
+      if (!porApres.has(m.apres)) porApres.set(m.apres, new Map());
+      const alvo = porApres.get(m.apres);
+      for (const [i, v] of mensal.get(col)) { const x = alvo.get(i) || [0, 0]; alvo.set(i, [x[0] + v, x[1] + 1]); }
+    }
+    if (porApres.size) {
+      const linhas = [];
+      for (const [apres, meses] of porApres) {
+        const precos = Array.from({ length: n }, (_, i) => (meses.has(i) ? meses.get(i)[0] / meses.get(i)[1] : null));
+        estado.ip.corrigidos.set(apres, new Set([...meses.keys()]));
+        linhas.push(`(${sqlTexto(apres)}, ${precos.map((p) => (p === null ? 'NULL' : p)).join(', ')})`);
+      }
+      await conn.query(`CREATE OR REPLACE TABLE ip_wide (d_apres VARCHAR, ${Array.from({ length: n }, (_, i) => `p${i} DOUBLE`).join(', ')})`);
+      await conn.query(`INSERT INTO ip_wide VALUES ${linhas.join(', ')}`);
+      // 3) RCON do mês = preço Infoprice × unidades; MAT/YTD recebem a diferença dos meses corrigidos
+      const novo = (i) => `CASE WHEN w.p${i} IS NOT NULL THEN w.p${i} * COALESCE(und_m${i}, 0) ELSE rc_m${i} END`;
+      const delta = (i) => `CASE WHEN w.p${i} IS NOT NULL THEN w.p${i} * COALESCE(und_m${i}, 0) - COALESCE(rc_m${i}, 0) ELSE 0 END`;
+      const partes = Array.from({ length: n }, (_, i) => `rc_m${i} = ${novo(i)}`);
+      for (const p of estado.periodosRc) {
+        const janela = indicesJanela(p.slice(0, 3), Number(p.slice(3)));
+        if (janela.length) partes.push(`rc_${p} = COALESCE(rc_${p}, 0) + ${janela.map(delta).join(' + ')}`);
+      }
+      await conn.query(`UPDATE fato SET ${partes.join(', ')} FROM ip_wide w WHERE fato.d_apres = w.d_apres`);
+      estado.ip.aplicado = true;
+    }
+  }
+  // todas as páginas recalculam com o RC novo
+  estado.analisePendente = estado.precoPendente = estado.preco2Pendente = estado.preco3Pendente = true;
+  desenharResumoIP();
+}
+
+// ----- marcação "IP" nas páginas de preço -----
+function ipAtivo() { return estado.ip.aplicado && estado.ip.corrigidos.size > 0; }
+function temIP(apres, indices) {
+  if (!ipAtivo()) return false;
+  const s = estado.ip.corrigidos.get(apres);
+  return !!s && indices.some((i) => s.has(i));
+}
+const marcaIP = (sim) => (sim ? '<sup class="ip">IP</sup>' : '');
+
+// ----- tela -----
+function desenharSecaoIP() {
+  const tem = estado.ip.arquivos.length > 0;
+  $('ip-controles').hidden = !tem;
+  if (!tem) { $('ip-depara').innerHTML = ''; desenharResumoIP(); return; }
+  const linhas = estado.ip.colunas.map((col, i) => {
+    const m = estado.ip.mapa[col];
+    return `<tr data-i="${i}" class="${baixaConfianca(m) ? 'ip-baixa' : ''}">
+      <td class="ip-col" title="${escaparHtml(col)}">${escaparHtml(col)}</td>
+      <td><div class="dropdown" id="ip-dd-${i}"></div></td>
+      <td class="ip-conf">${textoConfianca(m)}</td>
+      <td class="ip-status">${textoStatus(m)}</td>
+    </tr>`;
+  }).join('');
+  $('ip-depara').innerHTML = `<table class="tabela-ip">
+    <thead><tr><th>Coluna Infoprice</th><th>SKU sugerido (Apresentacao Desc Longa)</th><th>Confiança</th><th>Status</th></tr></thead>
+    <tbody>${linhas}</tbody></table>`;
+  estado.ip.colunas.forEach((col, i) => {
+    const sel = criarSeletorPreco(`ip-dd-${i}`, {
+      unico: true, vazio: SEM_CORRESPONDENCIA,
+      aoMudar: () => {
+        const v = [...sel.valores][0];
+        estado.ip.mapa[col] = { ...estado.ip.mapa[col], apres: v === SEM_CORRESPONDENCIA ? '' : v, status: 'manual' };
+        salvarDepara();
+        atualizarLinhaIP(i);
+        clearTimeout(estado.ip.temporizador);
+        estado.ip.temporizador = setTimeout(aplicarInfoprice, 400);
+      },
+    });
+    // as melhores sugestões aparecem primeiro na lista
+    const ranking = estado.ip.rankings[col] || [];
+    sel.opcoes = [SEM_CORRESPONDENCIA, ...ranking, ...estado.ip.listaApres.slice(1).filter((a) => !ranking.includes(a))];
+    sel.valores = new Set([estado.ip.mapa[col].apres || SEM_CORRESPONDENCIA]);
+    sel.desenhar();
+  });
+}
+
+function baixaConfianca(m) { return m.status === 'auto' && (m.confianca < CONFIANCA_BAIXA || !m.apres); }
+function textoConfianca(m) {
+  const nivel = m.confianca >= 85 ? 'alta' : m.confianca >= CONFIANCA_BAIXA ? 'média' : 'baixa';
+  return `${m.confianca}% <small>(${nivel})</small>`;
+}
+function textoStatus(m) {
+  if (m.status === 'manual') return m.apres ? 'Escolhido por você' : 'Sem correspondência (escolhido)';
+  if (m.status === 'salvo') return m.apres ? 'De-para salvo' : 'Sem correspondência (salvo)';
+  if (!m.apres) return '⚠ Sem correspondência — revisar';
+  return m.confianca < CONFIANCA_BAIXA ? '⚠ Sugestão — revisar' : 'Sugestão automática';
+}
+function atualizarLinhaIP(i) {
+  const tr = document.querySelector(`.tabela-ip tr[data-i="${i}"]`);
+  const m = estado.ip.mapa[estado.ip.colunas[i]];
+  tr.classList.toggle('ip-baixa', baixaConfianca(m));
+  tr.querySelector('.ip-status').innerHTML = textoStatus(m);
+  desenharResumoIP();
+}
+
+function desenharResumoIP() {
+  const ip = estado.ip;
+  if (!ip.arquivos.length) { $('ip-resumo').innerHTML = ''; return; }
+  const datas = ip.arquivos.flatMap((a) => a.semanas.map((s) => s.data)).sort();
+  const fmtData = (d) => d.split('-').reverse().join('/');
+  const media = (lst) => { const v = lst.filter(valido); return v.length ? fmt0.format(v.reduce((a, b) => a + b, 0) / v.length) : '-'; };
+  const arquivos = ip.arquivos.map((a) =>
+    `<li><b>${escaparHtml(a.nome)}</b> — ${a.semanas.length} semanas, ${a.colunas.length} SKUs; amostra média: ${media(a.semanas.map((s) => s.lojas))} lojas, ${media(a.semanas.map((s) => s.redes))} redes</li>`).join('');
+  const comCorresp = ip.colunas.filter((c) => ip.mapa[c] && ip.mapa[c].apres).length;
+  const mesesFora = ip.aplicado ? '' : ' <span class="ip-off">(correção desligada)</span>';
+  $('ip-resumo').innerHTML = `
+    <ul class="ip-arquivos">${arquivos}</ul>
+    <div class="ip-numeros">
+      <span>Período coberto: <b>${fmtData(datas[0])}</b> a <b>${fmtData(datas[datas.length - 1])}</b></span>
+      <span>SKUs com correspondência: <b>${comCorresp} / ${ip.colunas.length}</b></span>
+      <span>Apresentações corrigidas: <b>${ip.corrigidos.size}</b>${mesesFora}</span>
+    </div>`;
+}
+
+async function removerInfoprice() {
+  estado.ip.arquivos = [];
+  estado.ip.colunas = [];
+  estado.ip.mapa = {};
+  await aplicarInfoprice();
+  desenharSecaoIP();
+}
+
+function exportarDepara() {
+  const linhas = [['coluna_infoprice', 'sku_rm', 'status'],
+    ...estado.ip.colunas.map((c) => [c, estado.ip.mapa[c].apres, estado.ip.mapa[c].status])];
+  const csv = '﻿' + linhas.map((l) => l.map((x) => `"${String(x).replace(/"/g, '""')}"`).join(';')).join('\r\n');
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'de-para-infoprice.csv';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function importarDepara(arquivo) {
+  let texto = await arquivo.text();
+  if (texto.charCodeAt(0) === 0xFEFF) texto = texto.slice(1);
+  const sep = (texto.split(/\r?\n/)[0].match(/;/g) || []).length ? ';' : ',';
+  const linhas = lerCsv(texto, sep).filter((l) => l.length >= 2 && normalizar(l[0]) !== 'colunainfoprice');
+  const salvo = lerDeparaSalvo();
+  for (const [col, apres] of linhas) salvo[col] = apres === SEM_CORRESPONDENCIA ? '' : apres;
+  try { localStorage.setItem(CHAVE_DEPARA, JSON.stringify(salvo)); } catch { /* sem armazenamento */ }
+  // vale também para o que já está na tela
+  for (const [col, apres] of linhas) {
+    if (estado.ip.mapa[col]) estado.ip.mapa[col] = { ...estado.ip.mapa[col], apres: apres === SEM_CORRESPONDENCIA ? '' : apres, status: 'salvo' };
+  }
+  desenharSecaoIP();
+  await aplicarInfoprice();
+}
+
+$('ip-arquivos').addEventListener('change', async (e) => {
+  const arquivos = [...(e.target.files || [])];
+  e.target.value = '';
+  if (arquivos.length) await carregarArquivosIP(arquivos);
+});
+$('ip-exemplo').addEventListener('click', async () => {
+  try {
+    const resp = await fetch('exemplo_infoprice.csv');
+    if (!resp.ok) throw new Error('exemplo_infoprice.csv não encontrado');
+    await carregarArquivosIP([new File([await resp.blob()], 'exemplo_infoprice.csv', { lastModified: Date.now() })]);
+  } catch (e) { $('ip-erro').textContent = 'Não foi possível abrir o exemplo: ' + e.message; }
+});
+$('ip-usar').addEventListener('change', (e) => { estado.ip.usar = e.target.checked; aplicarInfoprice(); });
+$('ip-remover').addEventListener('click', removerInfoprice);
+$('ip-exportar').addEventListener('click', exportarDepara);
+$('ip-importar').addEventListener('change', async (e) => {
+  const a = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (a) await importarDepara(a);
+});

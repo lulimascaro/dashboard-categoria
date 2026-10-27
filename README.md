@@ -21,6 +21,16 @@ O único arquivo de dados aqui é `exemplo.csv`, com 200 linhas **fictícias**
 3. Na aba **Filtros**, marque o que quiser analisar. Os filtros valem para todas as abas.
 4. Na aba **Gráfico e Tabela**, escolha a dimensão do gráfico, da tabela e o período (MAT ou YTD).
 
+## Correção de preço (Infoprice)
+
+Na página **Filtros**, a seção "Correção de preço (Infoprice)" aceita um ou mais CSVs do Infoprice
+(separador ",", decimal ".", coluna `TEMPO` semanal e uma coluna por SKU). Eles também são lidos
+só no navegador. O site sugere a correspondência de cada coluna com uma apresentação da base RM
+(de-para), que pode ser revisada, exportada e importada; o de-para fica guardado apenas no navegador.
+O RC de cada mês com Infoprice passa a ser a média das semanas do mês, e o RCON = RC × Unidades.
+
+O arquivo `exemplo_infoprice.csv` tem preços **fictícios** dos produtos do `exemplo.csv`, para teste.
+
 ## Como publicar no GitHub Pages
 
 No GitHub: **Settings → Pages → Build and deployment → Source: Deploy from a branch**,
@@ -44,3 +54,4 @@ O número aparece no rodapé do site.
 | `style.css` | Cores e layout |
 | `app.js` | Leitura do CSV, filtros, gráficos e tabela |
 | `exemplo.csv` | Dados fictícios para teste |
+| `exemplo_infoprice.csv` | Preços Infoprice fictícios para teste |

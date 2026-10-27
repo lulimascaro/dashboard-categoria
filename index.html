@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dashboard de Mercado Farmacêutico</title>
   <!-- Ao publicar uma nova versão, atualize o número "?v=" nas duas linhas abaixo -->
-  <link rel="stylesheet" href="style.css?v=20261027-6">
+  <link rel="stylesheet" href="style.css?v=20261027-7">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
-  <script type="module" src="app.js?v=20261027-6"></script>
+  <script type="module" src="app.js?v=20261027-7"></script>
 </head>
 <body>
 
@@ -68,6 +68,36 @@
         <h2 class="faixa">PRODUTO</h2>
         <div class="grade-filtros" id="filtros-PRODUTO"></div>
       </section>
+      <section class="secao" id="secao-infoprice">
+        <h2 class="faixa">CORREÇÃO DE PREÇO (INFOPRICE)</h2>
+        <div class="card-ip">
+          <div class="aviso-privacidade">
+            <strong>🔒 Os arquivos Infoprice também não saem do seu computador.</strong>
+            <p>Eles são lidos e processados só neste navegador; nada é enviado nem salvo no site.
+              O de-para (qual coluna Infoprice corresponde a qual SKU) fica guardado apenas neste navegador.</p>
+          </div>
+          <div class="ip-botoes">
+            <label class="botao botao-principal">📂 Carregar arquivos Infoprice
+              <input type="file" id="ip-arquivos" accept=".csv,text/csv" multiple hidden>
+            </label>
+            <button class="botao botao-secundario" id="ip-exemplo">Usar Infoprice de exemplo</button>
+          </div>
+          <div id="ip-erro"></div>
+          <div id="ip-controles" hidden>
+            <div class="ip-botoes">
+              <label class="ip-chave"><input type="checkbox" id="ip-usar" checked> Usar preço Infoprice</label>
+              <button class="botao-pequeno" id="ip-exportar">⬇ Exportar de-para</button>
+              <label class="botao-pequeno">⬆ Importar de-para <input type="file" id="ip-importar" accept=".csv,text/csv" hidden></label>
+              <button class="botao-pequeno botao-limpar" id="ip-remover">✕ Remover dados Infoprice</button>
+            </div>
+            <div id="ip-resumo"></div>
+            <h3 class="ip-subtitulo">De-para: Infoprice → SKU da base RM</h3>
+            <p class="ip-dica">Linhas em amarelo têm confiança baixa: confira e, se precisar, troque o SKU na caixa.</p>
+            <div id="ip-depara"></div>
+          </div>
+        </div>
+      </section>
+
       <div class="rodape-filtros">
         <button class="botao-zerar" id="btn-zerar">ZERAR FILTROS</button>
       </div>
@@ -196,6 +226,7 @@
             <h3 class="cab-rcd">Apresentação Desc Longa</h3>
             <div id="p2-mensal-rolagem" class="rolagem-x"><div id="p2-mensal" class="grafico"></div></div>
           </div>
+          <div class="nota-ip" id="p2-nota-ip"></div>
           <div class="card-p2-mats">
             <div id="p2-legenda"></div>
             <div class="p2-mats">
@@ -255,6 +286,7 @@
                 <h3 class="cab-rcd" id="p3-titulo2">Market Share</h3>
                 <div id="p3-rolagem2" class="rolagem-x"><div id="p3-g2" class="grafico-p3"></div></div>
               </div>
+              <div class="nota-ip" id="p3-nota-ip"></div>
             </div>
             <div class="card-legenda p3-card-legenda">
               <h3>Legenda</h3>
