@@ -570,3 +570,7 @@ body.com-el .chave-el { background: var(--amarelo); color: #333; }
 .el-cl-campo { display: flex; flex-direction: column; font-size: 11px; color: #555; }
 .el-cl-campo .el-in { background: #fff; border: 1px solid #C9D6DC; text-align: left; font-size: 13px; color: #222; }
 @media print { .el-classif, .el-proj { display: none !important; } }
+/* colunas das ELs na aba Preço */
+#tabela-preco th.col-el { border-left: 2px dashed #9FC3D1; border-right: 2px dashed #9FC3D1; }
+#tabela-preco td.col-el { border-left: 2px dashed #9FC3D1; border-right: 2px dashed #9FC3D1; }
+#tabela-preco th .tag-el { margin: 0 0 3px; display: inline-block; background: #9FC3D1; color: #045b7b; }

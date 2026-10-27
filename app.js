@@ -1517,6 +1517,8 @@ function prepararPreco() {
 // Expressão SQL do período escolhido para uma medida (rcd, pf, rc, und)
 function exprPeriodoPreco(medida) {
   const p = $('preco-periodo').value;
+  // MAT+1: SKUs reais = MAT × evolução da projeção; ELs = meses 13–24 (Ano 2)
+  if (p === 'MATP') return `COALESCE(${exprMATP(medida)}, 0)`;
   if (p === 'MAT' || p === 'YTD') return `COALESCE(${medida}_${p}0, 0)`;
   const n = estado.meses.length;
   const k = Math.min(Number(p), n);
@@ -1529,6 +1531,10 @@ function descricaoPeriodo() {
   const p = $('preco-periodo').value;
   const n = estado.meses.length;
   const ultimoMes = n ? estado.meses[n - 1] : '';
+  if (p === 'MATP') {
+    const r = rotulosProjetados();
+    return { longo: `MAT+1 projetado (${r[0]} a ${r[11]}; SKUs reais = MAT × evolução R$ ÷ evolução UND, ELs = Ano 2)`, curto: 'MAT+1' };
+  }
   if (p === 'MAT') return { longo: `MAT (12 meses até ${ultimoMes || 'o último mês'})`, curto: 'MAT' };
   if (p === 'YTD') return { longo: `YTD (ano até ${ultimoMes || 'o último mês'})`, curto: 'YTD' };
   if (p === '1') return { longo: `Último mês (${ultimoMes})`, curto: ultimoMes };
@@ -1537,8 +1543,16 @@ function descricaoPeriodo() {
 }
 
 let ultimoPreco = null;
+// "MAT+1 (projetado)" só existe com as ELs ligadas
+function atualizarOpcaoMatp() {
+  const op = $('preco-periodo').querySelector('option[value="MATP"]');
+  op.hidden = !elLigado();
+  if (!elLigado() && $('preco-periodo').value === 'MATP') $('preco-periodo').value = 'MAT';
+}
+
 async function atualizarPreco() {
   estado.precoPendente = false;
+  atualizarOpcaoMatp();
   const s = estado.preco.seletores;
   const where = clausulaWhere(null);
   const e = (cond) => (where ? `${where} AND ${cond}` : `WHERE ${cond}`);
@@ -1580,8 +1594,9 @@ async function atualizarPreco() {
       any_value(d_produto) AS produto, any_value(sigla) AS sigla, any_value(d_corp) AS corp,
       any_value(d_conc) AS conc, any_value(d_qtd) AS qtd, any_value(d_forma) AS forma, any_value(qtdnum) AS qtdnum,
       SUM(${rcd}) AS rcd, SUM(${exprPeriodoPreco('pf')}) AS pf,
-      SUM(${exprPeriodoPreco('rc')}) AS rc, SUM(${exprPeriodoPreco('und')}) AS und
-    FROM fato ${e(`((${condConc} AND ${condQtd}) OR d_apres = ${sqlTexto(index)})`)}
+      SUM(${exprPeriodoPreco('rc')}) AS rc, SUM(${exprPeriodoPreco('und')}) AS und,
+      bool_or(is_el) AS el
+    FROM fato ${e(`((${condConc} AND ${condQtd}) OR d_apres = ${sqlTexto(index)}${elLigado() ? ' OR is_el' : ''})`)}
     GROUP BY 1`);
 
   // cálculos por apresentação
@@ -1613,7 +1628,9 @@ async function atualizarPreco() {
   ordenar(linhas);
   const n = Math.max(1, parseInt($('preco-topn').value, 10) || 10);
   let itens = linhas.slice(0, n);
-  if (!itens.includes(idx)) itens = ordenar([...itens, idx]);
+  // o index e os SKUs das ELs sempre aparecem, mesmo fora do Top N
+  const extras = linhas.filter((a) => (a === idx || a.el) && !itens.includes(a));
+  if (extras.length) itens = ordenar([...itens, ...extras]);
 
   ultimoPreco = { itens, idx, concIdx, periodo: descricaoPeriodo(), total: linhas.length };
   desenharPreco();
@@ -1665,6 +1682,17 @@ function desenharPreco() {
       max: (v) => v.max * 1.25,
     },
     series: [
+      { // borda tracejada nas colunas das ELs
+        type: 'custom', silent: true, z: 1, tooltip: { show: false },
+        data: itens.map((a, i) => (a.el ? [i, 0] : null)).filter(Boolean),
+        renderItem: (params, api) => {
+          const cs = params.coordSys;
+          const w = api.size([1, 0])[0];
+          const x = api.coord([api.value(0), 0])[0];
+          return { type: 'rect', shape: { x: x - w / 2 + 2, y: 2, width: w - 4, height: cs.y + cs.height + 4 },
+            style: { fill: 'none', stroke: '#045b7b', lineWidth: 1.5, lineDash: [6, 4] } };
+        },
+      },
       { // fundo amarelo-claro na coluna do index
         type: 'custom', silent: true, z: 0, tooltip: { show: false }, data: posIndex >= 0 ? [[posIndex, 0]] : [],
         renderItem: (params, api) => {
@@ -1747,13 +1775,13 @@ function desenharPreco() {
     [`UND ${periodo.curto} (mil)`, (a) => (a.und > 0 ? fmt1.format(a.und / 1000) : '-')],
   ];
   const cabecalho = `<thead><tr><th class="preco-rotulo">Apresentação</th>${itens.map((a) => `
-      <th class="${a.ehIndex ? 'col-index' : ''}" title="${escaparHtml(a.apres)}">
+      <th class="${a.ehIndex ? 'col-index' : ''}${a.el ? ' col-el' : ''}" title="${escaparHtml(a.apres)}">${a.el ? '<span class="tag-el">EL</span>' : ''}
         <b>${escaparHtml(nomeCurto(a).toUpperCase())}</b>
         <small>${escaparHtml([a.conc, a.forma, a.qtd].join(' · '))}</small>
       </th>`).join('')}</tr></thead>`;
   const corpo = '<tbody>' + linhasTabela.map(([rotulo, f, cls = '']) =>
     `<tr><td class="preco-rotulo ${cls}">${escaparHtml(rotulo)}</td>${itens.map((a) =>
-      `<td class="${cls}${a.ehIndex ? ' col-index' : ''}">${f(a)}</td>`).join('')}</tr>`).join('') + '</tbody>';
+      `<td class="${cls}${a.ehIndex ? ' col-index' : ''}${a.el ? ' col-el' : ''}">${f(a)}</td>`).join('')}</tr>`).join('') + '</tbody>';
   $('tabela-preco').innerHTML = `<colgroup><col style="width:${LARGURA_ROTULO_PRECO}px">${itens.map(() => '<col>').join('')}</colgroup>` + cabecalho + corpo;
 
   $('preco-rodape').innerHTML = `Período: <b>${escaparHtml(periodo.longo)}</b>.
@@ -1765,6 +1793,7 @@ function desenharPreco() {
 // meses (índices) do período escolhido na aba Preço
 function indicesPeriodoPreco() {
   const p = $('preco-periodo').value;
+  if (p === 'MATP') return [];
   if (p === 'MAT' || p === 'YTD') return indicesJanela(p, 0);
   const n = estado.meses.length;
   const k = Math.min(Number(p), n);
@@ -1892,6 +1921,14 @@ async function atualizarPreco2() {
     const [l] = await consultar(`SELECT ${somas} FROM fato ${whereSel}`);
     mensal = estado.meses.map((mes, i) => ({ mes, rcd: l['r' + i], und: l['u' + i], rc: l['c' + i], pf: l['p' + i] }));
   }
+  // MAT+1 mês a mês (ELs: meses 13–24; SKUs reais: sazonalidade do MAT × evolução)
+  let mensalProj = [];
+  if (n && elLigado()) {
+    const somasP = Array.from({ length: 12 }, (_, j) =>
+      `SUM(${exprMesP('rcd', j)}) r${j}, SUM(${exprMesP('und', j)}) u${j}, SUM(${exprMesP('rc', j)}) c${j}, SUM(${exprMesP('pf', j)}) p${j}`).join(', ');
+    const [lp] = await consultar(`SELECT ${somasP} FROM fato ${whereSel}`);
+    mensalProj = rotulosProjetados().map((mes, j) => ({ mes: mes + '*', rcd: lp['r' + j], und: lp['u' + j], rc: lp['c' + j], pf: lp['p' + j], proj: true }));
+  }
 
   // MAT-4 … MAT por apresentação
   const somasMat = [0, 1, 2, 3, 4].map((k) =>
@@ -1900,7 +1937,7 @@ async function atualizarPreco2() {
   const porApres = await consultar(`SELECT d_apres AS apres, ${somasMat}${somaProj} FROM fato ${whereSel} GROUP BY 1`);
   porApres.sort((a, b) => todas.indexOf(a.apres) - todas.indexOf(b.apres));
 
-  estado.p2.dados = { mensal, porApres, cores, apresUsadas: s.apres.valores.size ? [...s.apres.valores] : todas };
+  estado.p2.dados = { mensal, mensalProj, porApres, cores, apresUsadas: s.apres.valores.size ? [...s.apres.valores] : todas };
   desenharPreco2();
 }
 
@@ -1934,19 +1971,20 @@ function desenharMensalP2(mensal) {
   $('p2-mensal-card').hidden = false;
   const { ini, fim } = estado.tempo;
   const apresUsadas = estado.p2.dados.apresUsadas;
-  const meses = mensal.slice(ini, fim + 1).map((m, j) => {
+  const meses = [...mensal.slice(ini, fim + 1), ...(estado.p2.dados.mensalProj || [])].map((m, j) => {
     const rcdU = precoMedio(m.rcd, m.und);
     const rcU = precoMedio(m.rc, m.und);
     const pfU = precoMedio(m.pf, m.und);
     const dif = rcdU !== null && rcU !== null && rcU - rcdU > 0 ? rcU - rcdU : null;
-    const ip = apresUsadas.some((a) => temIP(a, [ini + j]));
-    return { mes: m.mes, rcdU, rcU, pfU, dif, ip, desc: rcdU !== null && pfU !== null ? 1 - rcdU / pfU : null };
+    const ip = !m.proj && apresUsadas.some((a) => temIP(a, [ini + j]));
+    return { mes: m.mes, proj: !!m.proj, rcdU, rcU, pfU, dif, ip, desc: rcdU !== null && pfU !== null ? 1 - rcdU / pfU : null };
   });
 
   // largura do gráfico: muitos meses => rolagem horizontal
   const caixa = $('p2-mensal-rolagem');
   const largura = Math.max(caixa.clientWidth, meses.length * LARGURA_MES + 120);
   $('p2-mensal').style.width = largura + 'px';
+  requestAnimationFrame(() => { caixa.scrollLeft = 1e9; }); // abre nos meses mais recentes
   const g = graficoP2('p2-mensal');
   g.resize();
   // barras ocupam até ~75% da altura; os pontos do desconto ficam numa faixa entre 80% e 92%
@@ -1980,18 +2018,18 @@ function desenharMensalP2(mensal) {
       {
         name: 'RCD/UND', type: 'bar', stack: 'p2', barMaxWidth: 34, itemStyle: { color: COR_RCD_ESCURO },
         // sem a parte de cima, o valor vai no topo do próprio RCD
-        data: meses.map((m) => ({ value: m.rcdU, label: { show: m.dif === null && m.rcdU !== null } })),
+        data: meses.map((m) => ({ value: m.rcdU, label: { show: m.dif === null && m.rcdU !== null }, ...estiloProj(m.proj) })),
         label: { position: 'top', fontSize: 9, color: '#2B2B2B', formatter: (p) => fmt1.format(p.value) },
       },
       {
         name: 'Dif RC-RCD', type: 'bar', stack: 'p2', itemStyle: { color: COR_DIF_CLARO },
-        data: meses.map((m) => m.dif),
+        data: meses.map((m) => ({ value: m.dif, ...estiloProj(m.proj) })),
         label: { show: true, position: 'top', fontSize: 9, color: '#2B2B2B', formatter: (p) => fmt1.format(meses[p.dataIndex].rcU) + (meses[p.dataIndex].ip ? ' IP' : '') },
       },
       {
         name: 'Desc. Com.', type: 'scatter', yAxisIndex: 1, symbolSize: 9,
         itemStyle: { color: COR_DESC, borderColor: '#9A7B10', borderWidth: 1 },
-        data: meses.map((m) => m.desc),
+        data: meses.map((m) => ({ value: m.desc, symbol: m.proj ? 'emptyCircle' : 'circle' })),
         label: { show: true, position: 'top', fontSize: 9, color: '#7A5F00', formatter: (p) => percentual(p.value) },
       },
     ],
@@ -2143,9 +2181,18 @@ async function atualizarPreco3() {
   linhas.sort((a, b) => ordemApresentacao(a.apres, b.apres));
   const cores = coresPorApresentacao(linhas.map((l) => l.apres));
   // por apresentação: lista de meses com r (RCD), u (UND), c (RCON), p (RPF)
+  // MAT+1 mês a mês, por apresentação
+  let proj = {};
+  if (estado.meses.length && elLigado()) {
+    const somasP = Array.from({ length: 12 }, (_, j) =>
+      `SUM(${exprMesP('rcd', j)}) r${j}, SUM(${exprMesP('und', j)}) u${j}, SUM(${exprMesP('rc', j)}) c${j}, SUM(${exprMesP('pf', j)}) p${j}`).join(', ');
+    const lp = await consultar(`SELECT d_apres AS apres, ${somasP} FROM fato ${e(condProduto)} GROUP BY 1`);
+    proj = Object.fromEntries(lp.map((l) => [l.apres, Array.from({ length: 12 }, (_, j) => ({ r: l['r' + j], u: l['u' + j], c: l['c' + j], p: l['p' + j] }))]));
+  }
   const series = linhas.map((l) => ({
     apres: l.apres,
     meses: estado.meses.map((_, i) => ({ r: l['r' + i], u: l['u' + i], c: l['c' + i], p: l['p' + i] })),
+    proj: proj[l.apres] || [],
   }));
   estado.p3.dados = { series, cores };
   desenharPreco3();
@@ -2169,7 +2216,10 @@ function desenharPreco3() {
   const d = estado.p3.dados;
   if (!d || !estado.meses.length || estado.pagina !== 'preco3') return;
   const { ini, fim } = estado.tempo;
-  const rotulosX = estado.meses.slice(ini, fim + 1);
+  const nReal = fim - ini + 1;
+  const comProj = d.series.some((s) => s.proj.length);
+  const rotulosX = [...estado.meses.slice(ini, fim + 1), ...(comProj ? rotulosProjetados().map((r) => r + '*') : [])];
+  const mesesDe = (s) => [...s.meses.slice(ini, fim + 1), ...(comProj ? s.proj : [])];
   const medida1 = MEDIDAS_P3_PRECO[$('p3-medida1').value];
   const campo2 = $('p3-medida2').value;
   $('p3-titulo1').textContent = `Preço Médio ${medida1.rotulo}`;
@@ -2179,6 +2229,8 @@ function desenharPreco3() {
   const largura = Math.max($('p3-rolagem1').clientWidth, rotulosX.length * LARGURA_MES + 130);
   $('p3-g1').style.width = largura + 'px';
   $('p3-g2').style.width = largura + 'px';
+  // com rolagem, os gráficos abrem nos meses mais recentes (onde estão as ELs e o MAT+1)
+  requestAnimationFrame(() => { $('p3-rolagem1').scrollLeft = 1e9; $('p3-rolagem2').scrollLeft = 1e9; });
   const selecionadas = Object.fromEntries(d.series.map((s) => [s.apres, !estado.p3.ocultas.has(s.apres)]));
   const eixoX = { type: 'category', data: rotulosX, axisLabel: { rotate: 90, fontSize: 10, interval: 0 } };
   const fmtValor = (v) => (medida1.pct ? percentual(v) : fmt2.format(v));
@@ -2204,20 +2256,33 @@ function desenharPreco3() {
       type: 'value', scale: true,
       axisLabel: { formatter: (v) => (medida1.pct ? fmt0.format(v * 100) + '%' : 'R$ ' + fmt0.format(v)) },
     },
-    series: d.series.map((s) => {
-      const valores = s.meses.slice(ini, fim + 1).map(medida1.calc);
-      const chave = pontosChaveComVazios(valores);
-      return {
+    series: d.series.flatMap((s) => {
+      const valores = mesesDe(s).map(medida1.calc);
+      const valoresReais = valores.map((v, i) => (i < nReal ? v : null));
+      const chave = pontosChaveComVazios(valoresReais);
+      const rotulo = { position: 'top', fontSize: 10, color: d.cores[s.apres], fontWeight: 'bold', formatter: (p) => fmtValor(p.value) + (p.data.ip ? ' IP' : '') };
+      const linhas = [{
         name: s.apres, type: 'line', connectNulls: false, symbolSize: 5,
         itemStyle: { color: d.cores[s.apres] }, lineStyle: { width: 2 },
-        data: valores.map((v, i) => ({ value: v, label: { show: chave.has(i) }, ip: usaRC && valido(v) && temIP(s.apres, [ini + i]) })),
-        label: { position: 'top', fontSize: 10, color: d.cores[s.apres], fontWeight: 'bold', formatter: (p) => fmtValor(p.value) + (p.data.ip ? ' IP' : '') },
-      };
+        data: valoresReais.map((v, i) => ({ value: v, label: { show: chave.has(i) }, ip: usaRC && valido(v) && temIP(s.apres, [ini + i]) })),
+        label: rotulo,
+      }];
+      // MAT+1: mesma cor, linha tracejada (mesmo nome = some junto na legenda)
+      if (comProj) {
+        const ultimo = valores.length - 1;
+        linhas.push({
+          name: s.apres, type: 'line', connectNulls: false, symbol: 'emptyCircle', symbolSize: 5,
+          itemStyle: { color: d.cores[s.apres] }, lineStyle: { width: 2, type: 'dashed' },
+          data: valores.map((v, i) => ({ value: i >= nReal - 1 ? v : null, label: { show: i === ultimo }, ip: false })),
+          label: rotulo,
+        });
+      }
+      return linhas;
     }),
   }, true);
 
   // ----- Gráfico 02: participação de cada apresentação no total do produto (100%) -----
-  const valoresMes = d.series.map((s) => s.meses.slice(ini, fim + 1).map((m) => (valido(m[campo2]) ? m[campo2] : 0)));
+  const valoresMes = d.series.map((s) => mesesDe(s).map((m) => (valido(m[campo2]) ? m[campo2] : 0)));
   const totais = rotulosX.map((_, i) => valoresMes.reduce((t, v) => t + v[i], 0));
   const g2 = graficoP3('p3-g2');
   g2.resize();
@@ -2236,7 +2301,7 @@ function desenharPreco3() {
       itemStyle: { color: d.cores[s.apres] },
       data: valoresMes[si].map((v, i) => {
         const share = totais[i] > 0 ? (v / totais[i]) * 100 : null;
-        return { value: share, label: { show: share !== null && share > 8 } };
+        return { value: share, label: { show: share !== null && share > 8 }, ...estiloProj(i >= nReal) };
       }),
       label: { position: 'inside', fontSize: 9, color: corTexto(d.cores[s.apres]), formatter: (p) => fmt1.format(p.value) + '%' },
     })),
@@ -2872,3 +2937,8 @@ window.addEventListener('projecao-alterada', () => {
   clearTimeout(esperaEL);
   esperaEL = setTimeout(() => aposMudancaEL(false), 300);
 });
+
+// barras/pontos de meses projetados (MAT+1): mais claros e hachurados
+function estiloProj(projetado) {
+  return projetado ? { itemStyle: { opacity: 0.55, decal: HACHURA } } : {};
+}
