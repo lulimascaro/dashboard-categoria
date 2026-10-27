@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dashboard de Mercado Farmacêutico</title>
   <!-- Ao publicar uma nova versão, atualize o número "?v=" nas duas linhas abaixo -->
-  <link rel="stylesheet" href="style.css?v=20261027-12">
+  <link rel="stylesheet" href="style.css?v=20261027-13">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
-  <script type="module" src="app.js?v=20261027-12"></script>
-  <script type="module" src="el.js?v=20261027-12"></script>
+  <script type="module" src="app.js?v=20261027-13"></script>
+  <script type="module" src="el.js?v=20261027-13"></script>
 </head>
 <body>
 
@@ -49,14 +49,13 @@
         <span class="titulo-app">Mercado Farmacêutico</span>
         <span id="info-arquivo"></span>
       </div>
-      <nav class="abas">
-        <button class="aba ativa" data-pagina="filtros">Filtros <span id="contador-filtros"></span></button>
-        <button class="aba" data-pagina="analise">Gráfico e Tabela</button>
-        <button class="aba" data-pagina="preco">Preço</button>
-        <button class="aba" data-pagina="preco2">Preço 2</button>
-        <button class="aba" data-pagina="preco3">Preço 3</button>
-        <button class="aba" data-pagina="el" title="Estudo de Lançamento">EL</button>
-      </nav>
+      <div class="menu-paginas" id="menu-paginas">
+        <button type="button" class="menu-botao" id="menu-botao">
+          <span class="menu-rotulo">Página:</span> <b id="menu-atual">Filtros</b>
+          <span id="menu-selo"><span class="contador-filtros"></span></span> <span class="menu-seta">▾</span>
+        </button>
+        <div class="menu-lista" id="menu-lista" hidden></div>
+      </div>
       <label class="chave-el" title="Inclui os SKUs das ELs e o período projetado MAT+1 em todas as páginas">
         <input type="checkbox" id="chave-el"> Incluir ELs e MAT+1
       </label>

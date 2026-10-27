@@ -337,7 +337,10 @@ async function carregarArquivo(arquivo) {
     mostrarProgresso('Pronto!', 1);
     $('tela-inicial').hidden = true;
     $('app').hidden = false;
-    trocarPagina('filtros');
+    // abre na última página usada neste navegador
+    let ultima = 'filtros';
+    try { ultima = localStorage.getItem(CHAVE_PAGINA) || 'filtros'; } catch { /* sem armazenamento */ }
+    trocarPagina(ultima);
   } catch (e) {
     console.error(e);
     mostrarErro('Não foi possível carregar o arquivo.\n\n' + (e && e.message ? e.message : e));
@@ -535,7 +538,7 @@ async function atualizarTudo() {
   for (const d of estado.dims) renderizarLista(d.key);
 
   const ativos = estado.dims.filter((d) => filtroAtivo(estado.filtros[d.key]));
-  $('contador-filtros').textContent = ativos.length ? ativos.length : '';
+  document.querySelectorAll('.contador-filtros').forEach((s) => { s.textContent = ativos.length ? ativos.length : ''; });
   $('resumo-filtros').textContent = ativos.length
     ? 'Filtros: ' + ativos.map((d) => d.rotulo).join(', ')
     : 'Sem filtros aplicados';
@@ -719,9 +722,14 @@ function whereAnalise() {
   return base ? `${base} AND ${sel}` : `WHERE ${sel}`;
 }
 
-function trocarPagina(pagina) {
+async function trocarPagina(pagina) {
+  if (!PAGINAS.some(([p]) => p === pagina)) pagina = 'filtros';
+  // edição da EL ainda esperando: grava agora e espera a base ser atualizada
+  if (window.estudosEL) window.estudosEL.descarregar();
+  if (estado.promessaEL) await estado.promessaEL;
   estado.pagina = pagina;
-  document.querySelectorAll('.aba').forEach((b) => b.classList.toggle('ativa', b.dataset.pagina === pagina));
+  try { localStorage.setItem(CHAVE_PAGINA, pagina); } catch { /* sem armazenamento */ }
+  marcarMenu(pagina);
   $('pagina-filtros').hidden = pagina !== 'filtros';
   $('pagina-analise').hidden = pagina !== 'analise';
   $('pagina-preco').hidden = pagina !== 'preco';
@@ -1357,7 +1365,6 @@ $('btn-trocar').addEventListener('click', () => {
   $('erro').hidden = true;
 });
 
-document.querySelectorAll('.aba').forEach((b) => b.addEventListener('click', () => trocarPagina(b.dataset.pagina)));
 $('btn-zerar').addEventListener('click', zerarFiltros);
 $('sel-tempo').addEventListener('change', atualizarAnalise);
 $('sel-tipo').addEventListener('change', desenharGraficos);
@@ -2851,7 +2858,8 @@ async function reconstruirEL() {
     const valores = [];
     const tot = {};
     for (const [m, campoEL] of medidas) {
-      const mes = (k) => { const v = el.dem && el.dem.m[k] ? el.dem.m[k][campoEL] : null; return valido(v) ? v * 1000 : null; };
+      const dem = window.estudosEL.demanda(el); // PF, PPP e CPP = UN × preço, como na aba EL
+      const mes = (k) => { const v = dem[k] ? dem[k][campoEL] : null; return valido(v) ? v * 1000 : null; };
       let mat = 0, ano = 0, prox = 0;
       janela.forEach((i, k) => { const v = mes(k); valores.push(sqlNum(v)); mat += v || 0; if (ytd.has(i)) ano += v || 0; });
       for (let k = 12; k < 24; k++) prox += mes(k) || 0;
@@ -2930,8 +2938,7 @@ document.body.classList.toggle('com-el', elLigado());
 // edições na aba EL: reconstrói os SKUs virtuais (com uma pequena espera enquanto digita)
 let esperaEL = null;
 window.addEventListener('els-alteradas', () => {
-  clearTimeout(esperaEL);
-  esperaEL = setTimeout(() => aposMudancaEL(true), 400);
+  estado.promessaEL = aposMudancaEL(true).finally(() => { estado.promessaEL = null; });
 });
 window.addEventListener('projecao-alterada', () => {
   clearTimeout(esperaEL);
@@ -2942,3 +2949,40 @@ window.addEventListener('projecao-alterada', () => {
 function estiloProj(projetado) {
   return projetado ? { itemStyle: { opacity: 0.55, decal: HACHURA } } : {};
 }
+
+// =====================================================================
+// Menu de páginas (caixa suspensa "Página: …")
+// Filtros sempre em primeiro; páginas novas entram na lista abaixo.
+// =====================================================================
+const CHAVE_PAGINA = 'dashboard-farma:pagina';
+const PAGINAS = [
+  ['filtros', 'Filtros'],
+  ['analise', 'Gráfico e Tabela'],
+  ['preco', 'Preço'],
+  ['preco2', 'Preço 2'],
+  ['preco3', 'Preço 3'],
+  ['el', 'EL'],
+];
+
+function montarMenu() {
+  $('menu-lista').innerHTML = PAGINAS.map(([p, nome]) =>
+    `<button type="button" class="menu-item" data-pagina="${p}">${nome}${p === 'filtros' ? ' <span class="contador-filtros"></span>' : ''}</button>`).join('');
+  $('menu-botao').addEventListener('click', () => { $('menu-lista').hidden = !$('menu-lista').hidden; });
+  $('menu-lista').addEventListener('click', (e) => {
+    const item = e.target.closest('.menu-item');
+    if (!item) return;
+    $('menu-lista').hidden = true;
+    trocarPagina(item.dataset.pagina);
+  });
+  document.addEventListener('mousedown', (e) => { if (!$('menu-paginas').contains(e.target)) $('menu-lista').hidden = true; });
+  marcarMenu('filtros');
+}
+
+function marcarMenu(pagina) {
+  const nome = (PAGINAS.find(([p]) => p === pagina) || PAGINAS[0])[1];
+  $('menu-atual').textContent = nome;
+  $('menu-selo').hidden = pagina !== 'filtros';
+  document.querySelectorAll('.menu-item').forEach((b) => b.classList.toggle('ativa', b.dataset.pagina === pagina));
+}
+
+montarMenu(); // no fim do arquivo: a lista PAGINAS já existe

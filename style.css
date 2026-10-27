@@ -574,3 +574,25 @@ body.com-el .chave-el { background: var(--amarelo); color: #333; }
 #tabela-preco th.col-el { border-left: 2px dashed #9FC3D1; border-right: 2px dashed #9FC3D1; }
 #tabela-preco td.col-el { border-left: 2px dashed #9FC3D1; border-right: 2px dashed #9FC3D1; }
 #tabela-preco th .tag-el { margin: 0 0 3px; display: inline-block; background: #9FC3D1; color: #045b7b; }
+
+/* ---------- Menu de páginas ---------- */
+.menu-paginas { position: relative; }
+.menu-botao {
+  display: flex; align-items: center; gap: 6px; background: #fff; color: var(--azul); border: none;
+  border-radius: 4px; padding: 7px 12px; font-size: 14px; cursor: pointer; min-width: 220px;
+}
+.menu-rotulo { color: #666; }
+.menu-seta { margin-left: auto; color: #666; }
+.menu-lista {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 60; min-width: 100%; background: #fff;
+  border-radius: 4px; box-shadow: 0 6px 18px rgba(0,0,0,.2); padding: 4px 0;
+}
+.menu-item {
+  display: flex; align-items: center; gap: 6px; width: 100%; background: none; border: none; text-align: left;
+  padding: 8px 14px; font-size: 14px; color: #333; cursor: pointer; white-space: nowrap;
+}
+.menu-item:hover { background: #F0F2F8; }
+.menu-item.ativa { font-weight: 700; color: var(--azul); background: #E8EBF5; }
+.contador-filtros:not(:empty) {
+  background: var(--amarelo); color: #333; border-radius: 10px; padding: 1px 7px; font-size: 11px; font-weight: 700;
+}

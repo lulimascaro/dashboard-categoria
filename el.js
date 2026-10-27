@@ -21,7 +21,7 @@ const INFO = [
 // [chave, rótulo, calculado?]
 const PREC = [
   ['pf', 'Preço Fábrica (R$)'], ['desc', 'Desc. Comercial (%)'], ['bruto', 'Preço Bruto (R$)', true],
-  ['impostos', 'Impostos (R$)'], ['liquido', 'Preço Líquido (R$)'], ['cpv', 'CPV (R$)'],
+  ['impostos', 'Impostos (R$)', 'aliquota'], ['liquido', 'Preço Líquido (R$)', true], ['cpv', 'CPV (R$)'],
   ['mbRs', 'Margem Bruta (R$)', true], ['mbPct', 'Margem Bruta (%)', true],
 ];
 const CONCORRENTES = [['ref', 'Referência'], ['c1', 'Concorrente 1'], ['c2', 'Concorrente 2']];
@@ -31,7 +31,8 @@ const COMP_LINHAS = [
   ['markup', 'Mark Up Distrib.(%)'], ['descDireto', 'Desconto Direto (%)'], ['ppp', 'Preço PPP (R$)'],
   ['cpp', 'Preço CPP (R$)'], ['margemFarma', 'Margem Farma (%)'],
 ];
-const LANC_CALC = ['pf', 'desc', 'venda', 'margemFarma']; // nas colunas do lançamento, vêm da Precificação ou são calculados
+const LANC_CALC = ['pf', 'desc', 'venda', 'descDireto', 'margemFarma']; // nas colunas do lançamento, vêm da Precificação ou são calculados
+const COMP_CALC = ['descDireto', 'margemFarma']; // calculados em todas as colunas do comparativo
 const INDICES = [['idxPf', 'Index PF Ano 1', 'pf'], ['idxPpp', 'Index PPP Ano 1', 'ppp'], ['idxCpp', 'Index CPP Ano 1', 'cpp']];
 const DEM_COLS = [['un', 'UN'], ['pf', 'PF'], ['ppp', 'PPP'], ['cpp', 'CPP']];
 const EST_COLS = [['un', 'UN'], ['dia', 'Dia', 0]];
@@ -75,17 +76,17 @@ function camposEditaveis() {
   const c = [['codigo', 'txt']];
   for (const a of APROVADORES) for (const [k] of APROV_COLS) c.push([`assin.${a}.${k}`, 'txt']);
   for (const [k, , tipo] of INFO) c.push([`info.${k}`, tipo || 'txt']);
-  for (const a of ['ano1', 'ano2']) for (const [k, , calc] of PREC) if (!calc) c.push([`prec.${a}.${k}`, 'num', 2]);
+  for (const a of ['ano1', 'ano2']) for (const [k, , calc] of PREC) if (calc !== true) c.push([`prec.${a}.${k}`, 'num', 2]);
   for (const l of ['l1', 'l2']) for (const [k] of COMP_LINHAS) if (!LANC_CALC.includes(k)) c.push([`comp.${l}.${k}`, 'num', 2]);
   for (const [cc] of CONCORRENTES) {
     for (const [k] of COMP_TOPO) c.push([`comp.${cc}.${k}`, 'txt']);
-    for (const [k] of COMP_LINHAS) if (k !== 'margemFarma') c.push([`comp.${cc}.${k}`, 'num', 2]);
+    for (const [k] of COMP_LINHAS) if (!COMP_CALC.includes(k)) c.push([`comp.${cc}.${k}`, 'num', 2]);
   }
   for (const s of ['share1', 'share2']) for (const [k] of DEM_COLS) c.push([`dem.${s}.${k}`, 'num', 2]);
   for (let i = 0; i < 24; i++) {
-    for (const [k] of DEM_COLS) c.push([`dem.m.${i}.${k}`, 'num', 2]);
+    c.push([`dem.m.${i}.un`, 'num', 2]); // PF, PPP e CPP da Demanda = UN × preço (calculados)
     for (const [k, , d = 2] of EST_COLS) c.push([`est.m.${i}.${k}`, 'num', d]);
-    for (const [k] of SELL_COLS) c.push([`sell.m.${i}.${k}`, 'num', 2]);
+    c.push([`sell.m.${i}.un`, 'num', 2]); // Fat. B. e Fat. L. = UN × Preço Bruto / Líquido (calculados)
   }
   for (let i = 0; i < 3; i++) c.push([`sell.pc.${i}`, 'num', 2]);
   for (const [a] of ANOS) {
@@ -168,14 +169,43 @@ const CALCS = {};
 (function montarCalculos() {
   for (const a of ['ano1', 'ano2']) {
     CALCS[`prec.${a}.bruto`] = { d: 2, f: (el) => (num(el.prec[a].pf) !== null && num(el.prec[a].desc) !== null ? el.prec[a].pf * (1 - el.prec[a].desc / 100) : null) };
-    CALCS[`prec.${a}.mbRs`] = { d: 2, f: (el) => (num(el.prec[a].liquido) !== null && num(el.prec[a].cpv) !== null ? el.prec[a].liquido - el.prec[a].cpv : null) };
-    CALCS[`prec.${a}.mbPct`] = { d: 2, f: (el) => { const r = dividir(CALCS[`prec.${a}.mbRs`].f(el), el.prec[a].liquido); return r === null ? null : r * 100; } };
+    // Impostos = Preço Bruto × alíquota (a alíquota é guardada quando os impostos são digitados ou importados)
+    CALCS[`prec.${a}.impostos`] = { d: 2, f: (el) => {
+      const bruto = CALCS[`prec.${a}.bruto`].f(el);
+      if (num(el.prec[a].aliquota) !== null) return bruto === null ? null : bruto * el.prec[a].aliquota / 100;
+      return num(el.prec[a].impostos);
+    } };
+    CALCS[`prec.${a}.liquido`] = { d: 2, f: (el) => { const b = CALCS[`prec.${a}.bruto`].f(el); const i = CALCS[`prec.${a}.impostos`].f(el); return b === null ? null : b - (i || 0); } };
+    CALCS[`prec.${a}.mbRs`] = { d: 2, f: (el) => { const l = CALCS[`prec.${a}.liquido`].f(el); return l !== null && num(el.prec[a].cpv) !== null ? l - el.prec[a].cpv : null; } };
+    CALCS[`prec.${a}.mbPct`] = { d: 2, f: (el) => { const r = dividir(CALCS[`prec.${a}.mbRs`].f(el), CALCS[`prec.${a}.liquido`].f(el)); return r === null ? null : r * 100; } };
   }
   // colunas do lançamento no comparativo: PF, desconto e preço de venda vêm da Precificação
   for (const [l, a] of [['l1', 'ano1'], ['l2', 'ano2']]) {
     CALCS[`comp.${l}.pf`] = { d: 2, f: (el) => num(el.prec[a].pf) };
     CALCS[`comp.${l}.desc`] = { d: 2, f: (el) => num(el.prec[a].desc) };
     CALCS[`comp.${l}.venda`] = { d: 2, f: (el) => CALCS[`prec.${a}.bruto`].f(el) };
+  }
+  // Desconto Direto = 1 − PPP ÷ PF (no lançamento, o PF vem da Precificação)
+  const pfComp = (el, c) => (c === 'l1' ? num(el.prec.ano1.pf) : c === 'l2' ? num(el.prec.ano2.pf) : num(el.comp[c].pf));
+  for (const c of ['l1', 'l2', 'ref', 'c1', 'c2']) {
+    CALCS[`comp.${c}.descDireto`] = { d: 2, f: (el) => { const r = dividir(el.comp[c].ppp, pfComp(el, c)); return r === null ? null : (1 - r) * 100; } };
+  }
+  // Demanda (k R$) = UN (k) × preço do ano; Sell-In = UN × Preço Bruto (Fat. B.) / Preço Líquido (Fat. L.)
+  const precoDem = {
+    pf: (el, a) => num(el.prec[a].pf),
+    ppp: (el, a) => num(el.comp[a === 'ano1' ? 'l1' : 'l2'].ppp),
+    cpp: (el, a) => num(el.comp[a === 'ano1' ? 'l1' : 'l2'].cpp),
+    fatB: (el, a) => CALCS[`prec.${a}.bruto`].f(el),
+    fatL: (el, a) => CALCS[`prec.${a}.liquido`].f(el),
+  };
+  for (let i = 0; i < 24; i++) {
+    const a = i < 12 ? 'ano1' : 'ano2';
+    for (const k of ['pf', 'ppp', 'cpp']) {
+      CALCS[`dem.m.${i}.${k}`] = { d: 2, f: (el) => { const u = num(el.dem.m[i].un); const p = precoDem[k](el, a); return u === null || p === null ? null : u * p; } };
+    }
+    for (const k of ['fatB', 'fatL']) {
+      CALCS[`sell.m.${i}.${k}`] = { d: 2, f: (el) => { const u = num(el.sell.m[i].un); const p = precoDem[k](el, a); return u === null || p === null ? null : u * p; } };
+    }
   }
   for (const c of ['l1', 'l2', 'ref', 'c1', 'c2']) {
     CALCS[`comp.${c}.margemFarma`] = { d: 2, f: (el) => { const r = dividir(el.comp[c].ppp, el.comp[c].cpp); return r === null ? null : (1 - r) * 100; } };
@@ -189,8 +219,8 @@ const CALCS = {};
   }
   // totais de ano (Demanda e Sell-In somam os meses; Estoque é a posição do último mês do ano)
   for (const [t, ini] of [['t1', 0], ['t2', 12]]) {
-    for (const [k] of DEM_COLS) CALCS[`dem.${t}.${k}`] = { d: 2, f: (el) => somar(el.dem.m.slice(ini, ini + 12).map((m) => m[k])) };
-    for (const [k] of SELL_COLS) CALCS[`sell.${t}.${k}`] = { d: 2, f: (el) => somar(el.sell.m.slice(ini, ini + 12).map((m) => m[k])) };
+    for (const [k] of DEM_COLS) CALCS[`dem.${t}.${k}`] = { d: 2, f: (el) => somar(Array.from({ length: 12 }, (_, j) => valorMes(el, 'dem', ini + j, k))) };
+    for (const [k] of SELL_COLS) CALCS[`sell.${t}.${k}`] = { d: 2, f: (el) => somar(Array.from({ length: 12 }, (_, j) => valorMes(el, 'sell', ini + j, k))) };
     for (const [k, , d = 2] of EST_COLS) CALCS[`est.${t}.${k}`] = { d, f: (el) => num(el.est.m[ini + 11][k]) };
     // preço unitário médio do ano = valor ÷ UN
     for (const k of ['pf', 'ppp', 'cpp']) CALCS[`dem.pu${t}.${k}`] = { d: 2, f: (el) => dividir(CALCS[`dem.${t}.${k}`].f(el), CALCS[`dem.${t}.un`].f(el)) };
@@ -223,7 +253,14 @@ function salvar() {
     $('el-aviso-salvar').textContent = '⚠ Não foi possível salvar no navegador (armazenamento cheio ou bloqueado). Exporte as ELs para não perder.';
   }
 }
-function salvarDepois() { clearTimeout(els.temporizador); els.temporizador = setTimeout(salvar, 300); }
+function salvarDepois() { clearTimeout(els.temporizador); els.temporizador = setTimeout(() => { els.temporizador = null; salvar(); }, 400); }
+// grava na hora o que estiver esperando (usado ao trocar de página)
+function descarregar() {
+  if (!els.temporizador) return;
+  clearTimeout(els.temporizador);
+  els.temporizador = null;
+  salvar();
+}
 const elAtiva = () => els.lista.find((e) => e.id === els.ativa) || null;
 const nomeEL = (el) => [el.info.produto, el.info.padraoSku].filter((x) => x && String(x).trim()).join(' ').trim() || 'EL sem nome';
 
@@ -235,6 +272,11 @@ function campo(el, caminho, d = 2, extra = '') {
 }
 function campoTexto(el, caminho, extra = '') {
   return `<input class="el-in el-txt ${extra}" data-c="${caminho}" value="${esc(ler(el, caminho))}">`;
+}
+// digitável e calculado ao mesmo tempo (ex.: Impostos acompanha o Preço Bruto pela alíquota)
+function campoDerivado(el, caminho, d = 2) {
+  const c = CALCS[caminho];
+  return `<input class="el-in el-num el-deriv" data-c="${caminho}" data-k="${caminho}" data-d="${d}" inputmode="decimal" value="${esc(fmtNum(c ? c.f(el) : null, d))}" title="Ao mudar o Preço Bruto, acompanha pela mesma alíquota">`;
 }
 function calc(caminho) {
   return `<output class="el-calc" data-k="${caminho}" title="Calculado automaticamente"></output>`;
@@ -282,7 +324,7 @@ function htmlEL(el) {
       <table class="el-tab-prec">
         <thead><tr><th></th><th class="el-th">Ano 1</th><th class="el-th">Ano 2</th></tr></thead>
         <tbody>${PREC.map(([k, r, ehCalc]) => `<tr><td class="el-rot">${r}</td>${['ano1', 'ano2'].map((a) =>
-          `<td>${ehCalc ? calc(`prec.${a}.${k}`) : campo(el, `prec.${a}.${k}`)}</td>`).join('')}</tr>`).join('')}</tbody>
+          `<td>${ehCalc === true ? calc(`prec.${a}.${k}`) : ehCalc === 'aliquota' ? campoDerivado(el, `prec.${a}.${k}`) : campo(el, `prec.${a}.${k}`)}</td>`).join('')}</tr>`).join('')}</tbody>
       </table>
       <table class="el-tab-comp">
         <thead><tr><th></th><th class="el-th">Lançamento Ano 1</th><th class="el-th">Lançamento Ano 2</th>${CONCORRENTES.map(([, r]) => `<th class="el-th">${r}</th>`).join('')}</tr></thead>
@@ -308,7 +350,7 @@ function htmlEL(el) {
           ${linhaVol('Total ano 2', cols.map(([k]) => `<td>${calc(`${grupo}.t2.${k}`)}</td>`).join(''))}
           ${extraTot}
           <tr class="el-espaco"><td colspan="${cols.length + 1}"></td></tr>
-          ${mesesLinhas(24, (i) => linhaVol(`Mês ${i + 1}`, cols.map(([k, , d = 2]) => `<td>${campo(el, `${grupo}.m.${i}.${k}`, d)}</td>`).join('')))}
+          ${mesesLinhas(24, (i) => linhaVol(`Mês ${i + 1}`, cols.map(([k, , d = 2]) => `<td>${CALCS[`${grupo}.m.${i}.${k}`] ? calc(`${grupo}.m.${i}.${k}`) : campo(el, `${grupo}.m.${i}.${k}`, d)}</td>`).join('')))}
         </tbody>
       </table>
     </div>`;
@@ -368,6 +410,13 @@ function htmlEL(el) {
   return cab + info + htmlClassificacao(el) + prec + volume + exec;
 }
 
+// valor de um mês (calculado quando houver fórmula, digitado nos demais)
+function valorMes(el, grupo, i, k) {
+  const c = CALCS[`${grupo}.m.${i}.${k}`];
+  return c ? c.f(el) : num(el[grupo].m[i][k]);
+}
+
+// recalcula todos os campos calculados da EL aberta
 function recalcular() {
   const el = elAtiva();
   if (!el) return;
@@ -375,6 +424,12 @@ function recalcular() {
     const c = CALCS[o.dataset.k];
     const v = c ? c.f(el) : null;
     o.textContent = v === null ? '-' : fmtNum(v, c.d);
+  });
+  // campos digitáveis que também são calculados (Impostos): atualiza se não estiver sendo editado
+  document.querySelectorAll('#el-folha .el-deriv').forEach((inp) => {
+    if (inp === document.activeElement) return;
+    const c = CALCS[inp.dataset.k];
+    inp.value = fmtNum(c ? c.f(el) : null, Number(inp.dataset.d));
   });
 }
 
@@ -411,6 +466,11 @@ function aoEditar(e) {
   else if (alvo.type === 'checkbox') valor = alvo.checked;
   else valor = alvo.value;
   gravar(el, alvo.dataset.c, valor);
+  const imp = /^prec\.(ano\d)\.impostos$/.exec(alvo.dataset.c);
+  if (imp) {
+    const bruto = CALCS[`prec.${imp[1]}.bruto`].f(el);
+    el.prec[imp[1]].aliquota = valor !== null && bruto ? (valor / bruto) * 100 : null;
+  }
   if (alvo.classList.contains('el-area')) ajustarAltura(alvo);
   if (alvo.dataset.c.startsWith('classif.') || alvo.dataset.c === 'info.padraoSku') {
     const ap = document.querySelector('#el-folha .el-apres-el');
@@ -606,7 +666,8 @@ function importarHtmlEL(texto) {
       if (!def) continue;
       for (const a of ['ano1', 'ano2']) {
         if (idx[a] === undefined) continue;
-        if (def[2]) guardarCalc(`prec.${a}.${def[0]}`, cel[idx[a]]); else pos(`prec.${a}.${def[0]}`, cel[idx[a]]);
+        if (def[2] === true) guardarCalc(`prec.${a}.${def[0]}`, cel[idx[a]]); else pos(`prec.${a}.${def[0]}`, cel[idx[a]]);
+        if (def[0] === 'bruto') guardarCalc(`prec.${a}.brutoArquivo`, cel[idx[a]]);
       }
     }
   }
@@ -658,7 +719,9 @@ function importarHtmlEL(texto) {
           if (idx[k] === undefined) continue;
           const v = cel[idx[k]];
           if (v === undefined) continue;
-          if (ch.mes !== undefined && ch.mes < 24) pos(`${grupo}.m.${ch.mes}.${k}`, v);
+          if (ch.mes !== undefined && ch.mes < 24) {
+            if (CALCS[`${grupo}.m.${ch.mes}.${k}`]) guardarCalc(`${grupo}.m.${ch.mes}.${k}`, v); else pos(`${grupo}.m.${ch.mes}.${k}`, v);
+          }
           else if (ch.total) guardarCalc(`${grupo}.${ch.total}.${k}`, v);
         }
       }
@@ -722,6 +785,12 @@ function importarHtmlEL(texto) {
   lerAnos([['Qtd. CNPJs Positivados', 'exec.cnpj'], ['Giro Mensal', 'exec.giro']]);
   lerAnos([['Investimento Comercial', 'inv.com', true], ['Investimento MKT', 'inv.mkt', true]]);
 
+  // alíquota de impostos = Impostos ÷ Preço Bruto, como estão no arquivo
+  for (const a of ['ano1', 'ano2']) {
+    const bruto = doArquivo[`prec.${a}.brutoArquivo`] ?? CALCS[`prec.${a}.bruto`].f(el);
+    if (num(el.prec[a].impostos) !== null && bruto) el.prec[a].aliquota = (el.prec[a].impostos / bruto) * 100;
+  }
+
   // resumo: campos que não foram encontrados e cálculos diferentes do arquivo
   const faltando = camposEditaveis().map(([c]) => c).filter((c) => !achados.has(c));
   const diferencas = [];
@@ -737,6 +806,7 @@ function importarHtmlEL(texto) {
 
 function nomeCalc(caminho) {
   const p = caminho.split('.');
+  if (p[1] === 'm') return nomeCampo(caminho);
   if (p[0] === 'prec') return nomeCampo(caminho);
   if (p[0] === 'comp') return nomeCampo(caminho);
   const t = { t1: 'Total ano 1', t2: 'Total ano 2' }[p[1]];
@@ -834,6 +904,9 @@ try { projecao = { ...projecao, ...(JSON.parse(localStorage.getItem(CHAVE_PROJ) 
 // o dashboard lê as ELs e a projeção por aqui
 window.estudosEL = {
   lista: () => els.lista,
+  descarregar: () => descarregar(),
+  // Demanda calculada (k): 24 meses × { un, pf, ppp, cpp }
+  demanda: (el) => Array.from({ length: 24 }, (_, i) => Object.fromEntries(DEM_COLS.map(([k]) => [k, valorMes(el, 'dem', i, k)]))),
   projecao: () => ({ ...projecao }),
 };
 
