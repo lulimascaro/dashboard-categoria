@@ -72,8 +72,8 @@
     <!-- Página 2: Gráfico e Tabela -->
     <main id="pagina-analise" class="pagina" hidden>
       <div class="barra-seletores">
-        <label>Gráfico <select id="sel-grafico"></select></label>
-        <label>Tabela <select id="sel-tabela"></select></label>
+        <div class="seletor"><span>Gráfico</span><div class="multi" id="multi-grafico"></div></div>
+        <div class="seletor"><span>Tabela</span><div class="multi" id="multi-tabela"></div></div>
         <label>Tempo
           <select id="sel-tempo">
             <option value="MAT">MAT</option>
@@ -84,7 +84,15 @@
       </div>
 
       <div class="layout-analise">
-        <aside class="coluna-kpis" id="kpis"></aside>
+        <aside class="coluna-kpis">
+          <div id="kpis"></div>
+          <div class="exibicao">
+            <div class="exibicao-titulo">Exibição</div>
+            <label>Top N <input type="number" id="exib-topn" min="1" step="1" placeholder="tudo"></label>
+            <label class="caixa"><input type="checkbox" id="exib-outros"> Agrupar o restante como Outros</label>
+            <label class="caixa"><input type="checkbox" id="exib-80"> Aglutinar automaticamente (80% RCD)</label>
+          </div>
+        </aside>
         <div class="area-principal">
           <div class="graficos">
             <div class="card-grafico">
@@ -96,7 +104,12 @@
               <div class="grafico" id="grafico-und"></div>
             </div>
           </div>
+          <div id="nota-grafico"></div>
           <div class="card-tabela">
+            <div class="barra-tabela">
+              <button class="botao-pequeno" id="btn-expandir">+ Expandir tudo</button>
+              <button class="botao-pequeno" id="btn-recolher">− Recolher tudo</button>
+            </div>
             <div class="tabela-rolagem">
               <table id="tabela"></table>
             </div>

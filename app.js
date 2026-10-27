@@ -40,9 +40,10 @@ const MESES = { jan: 1, fev: 2, mar: 3, abr: 4, mai: 5, jun: 6, jul: 7, ago: 8, 
 const NOME_MES = Object.keys(MESES);
 
 const CORES = ['#6B76A6', '#A58BDB', '#F2C94C', '#4FA3A5', '#E07B53', '#8BB174',
-  '#C25B8C', '#5B8FD9', '#B8A07E', '#3D4466', '#D98FB0'];
+  '#C25B8C', '#5B8FD9', '#B8A07E', '#3D4466', '#D98FB0', '#2E8B57', '#9C6644',
+  '#7FB3D5', '#D4AC0D', '#6C3483', '#48C9B0', '#CB4335', '#85929E', '#F0B27A'];
 const COR_OUTROS = '#BDBDBD';
-const MAX_SERIES = 10;          // grupos no gráfico antes de virar "Outros"
+const MAX_SERIES = 50;          // limite de segurança de cores no gráfico (o resto vira "Outros")
 const MAX_OPCOES_VISIVEIS = 300; // itens mostrados por card de filtro
 const MAX_LINHAS_TABELA = 1000;
 
@@ -53,12 +54,18 @@ const estado = {
   db: null,
   conn: null,
   dims: [],            // dimensões presentes no arquivo
-  filtros: {},         // key -> { modo: 'todos' | 'inc' | 'exc', valores: Set }
+  // key -> { modo, valores }. 'inc' com lista vazia = nada marcado = sem filtro (como no Power BI);
+  // 'todos' = "Selecionar tudo" marcado (também sem filtro); 'exc' = tudo menos os valores.
+  filtros: {},
   opcoes: {},          // key -> lista de valores disponíveis (cascata)
   busca: {},           // key -> texto de busca
   pagina: 'filtros',
   analisePendente: true,
   ordem: { col: 'r0', desc: true },
+  dimsGrafico: [],     // dimensões do gráfico, na ordem escolhida
+  dimsTabela: [],      // dimensões da tabela (níveis da matriz), na ordem escolhida
+  expandidos: new Set(), // linhas abertas na matriz (caminho dos valores)
+  exib: { topN: null, outros: false, auto80: false },
   graficos: {},
   arquivoAtual: null,
 };
@@ -352,17 +359,17 @@ function prepararInterface() {
   estado.opcoes = {};
   for (const secao of ['MERCADO', 'PRODUTO']) $('filtros-' + secao).innerHTML = '';
   for (const d of estado.dims) {
-    estado.filtros[d.key] = { modo: 'todos', valores: new Set() };
+    estado.filtros[d.key] = { modo: 'inc', valores: new Set() };
     estado.busca[d.key] = '';
     $('filtros-' + d.secao).appendChild(criarCardFiltro(d));
   }
   // seletores da página 2
-  const opcoesDim = estado.dims.map((d) => `<option value="${d.key}">${escaparHtml(d.rotulo)}</option>`).join('');
-  $('sel-grafico').innerHTML = opcoesDim;
-  $('sel-tabela').innerHTML = opcoesDim + '<option value="__prodcorp">Produto Corp</option>';
-  if (estado.dims.some((d) => d.key === 'forma')) $('sel-grafico').value = 'forma';
-  if (estado.dims.some((d) => d.key === 'produto')) $('sel-tabela').value = '__prodcorp';
+  const tem = (k) => estado.dims.some((d) => d.key === k);
+  estado.dimsGrafico = tem('forma') ? ['forma'] : estado.dims.slice(0, 1).map((d) => d.key);
+  estado.dimsTabela = tem('produto') ? ['__prodcorp'] : estado.dims.slice(0, 1).map((d) => d.key);
+  estado.expandidos = new Set();
   estado.ordem = { col: 'r0', desc: true };
+  renderizarSeletores();
 }
 
 function criarCardFiltro(d) {
@@ -461,12 +468,105 @@ async function atualizarTudo() {
 
 function zerarFiltros() {
   for (const d of estado.dims) {
-    estado.filtros[d.key] = { modo: 'todos', valores: new Set() };
+    estado.filtros[d.key] = { modo: 'inc', valores: new Set() };
     estado.busca[d.key] = '';
     const card = $('card-' + d.key);
     if (card) card.querySelector('.cf-busca').value = '';
   }
   aoMudarFiltro();
+}
+
+
+// ---------------------------------------------------------------------
+// Página 2: seletores de várias dimensões (a ordem importa)
+// ---------------------------------------------------------------------
+const PRODUTO_CORP = '__prodcorp';
+
+function rotuloDim(key) {
+  if (key === PRODUTO_CORP) return 'Produto Corp';
+  const d = estado.dims.find((x) => x.key === key);
+  return d ? d.rotulo : key;
+}
+function exprDim(key) {
+  return key === PRODUTO_CORP ? `(d_produto || ' (' || sigla || ')')` : `d_${key}`;
+}
+
+function renderizarSeletores() {
+  const base = estado.dims.map((d) => d.key);
+  montarMulti('multi-grafico', estado.dimsGrafico, base, () => atualizarGraficos($('sel-tempo').value, clausulaWhere(null)));
+  montarMulti('multi-tabela', estado.dimsTabela, [...base, PRODUTO_CORP], () => {
+    estado.expandidos = new Set();
+    atualizarTabela($('sel-tempo').value, clausulaWhere(null));
+  });
+}
+
+// Desenha as "etiquetas" numeradas (1. Produto ×) e a lista para adicionar
+function montarMulti(id, lista, opcoes, aoMudar) {
+  const el = $(id);
+  const chips = lista.map((k, i) =>
+    `<span class="chip"><b>${i + 1}</b> ${escaparHtml(rotuloDim(k))}<button type="button" data-rm="${i}" title="Remover">×</button></span>`).join('');
+  const restantes = opcoes.filter((k) => !lista.includes(k));
+  el.innerHTML = chips + (restantes.length
+    ? `<select><option value="">+ adicionar…</option>${restantes.map((k) => `<option value="${k}">${escaparHtml(rotuloDim(k))}</option>`).join('')}</select>`
+    : '');
+  el.onclick = (e) => {
+    const b = e.target.closest('button[data-rm]');
+    if (!b) return;
+    lista.splice(Number(b.dataset.rm), 1);
+    montarMulti(id, lista, opcoes, aoMudar);
+    aoMudar();
+  };
+  const sel = el.querySelector('select');
+  if (sel) sel.onchange = () => {
+    if (!sel.value) return;
+    lista.push(sel.value);
+    montarMulti(id, lista, opcoes, aoMudar);
+    aoMudar();
+  };
+}
+
+// ---------------------------------------------------------------------
+// Regra de exibição: Top N / Outros / 80% do RCD
+// Recebe itens com .r0 (RCD do período atual) e devolve quais ficam,
+// quais vão para "Outros" e quantos ficam escondidos.
+// ---------------------------------------------------------------------
+function aplicarExibicao(itens) {
+  const { topN, outros, auto80 } = estado.exib;
+  const ordenados = [...itens].sort((a, b) => (b.r0 || 0) - (a.r0 || 0));
+  let n = ordenados.length;
+  let agrupar = false;
+  if (auto80) {
+    const total = ordenados.reduce((s, i) => s + Math.max(0, i.r0 || 0), 0);
+    if (total > 0) {
+      let acumulado = 0;
+      n = 0;
+      while (n < ordenados.length && acumulado < 0.8 * total) { acumulado += Math.max(0, ordenados[n].r0 || 0); n++; }
+    }
+    agrupar = true;
+  } else if (topN > 0) {
+    n = Math.min(topN, ordenados.length);
+    agrupar = outros;
+  }
+  const resto = ordenados.slice(n);
+  return { manter: ordenados.slice(0, n), outros: agrupar ? resto : [], escondidos: agrupar ? 0 : resto.length };
+}
+
+function somarCampos(destino, origem, campos) {
+  for (const c of campos) destino[c] = (destino[c] || 0) + (origem[c] || 0);
+  return destino;
+}
+
+function lerExibicao() {
+  const n = parseInt($('exib-topn').value, 10);
+  estado.exib = {
+    topN: Number.isFinite(n) && n > 0 ? n : null,
+    outros: $('exib-outros').checked,
+    auto80: $('exib-80').checked,
+  };
+  $('exib-topn').disabled = estado.exib.auto80;
+  $('exib-outros').disabled = estado.exib.auto80;
+  desenharGraficos();
+  desenharTabela();
 }
 
 // ---------------------------------------------------------------------
@@ -518,34 +618,54 @@ async function atualizarKpis(T, where) {
     `<div class="kpi ${cls}"><div class="kpi-rotulo">${rotulo}</div><div class="kpi-valor">${valor}</div></div>`).join('');
 }
 
+// ----- Gráficos -----
+const CAMPOS_GRAFICO = ['r0', 'r1', 'r2', 'r3', 'r4', 'u0', 'u1', 'u2', 'u3', 'u4'];
+let ultimoGrafico = null;
+
 async function atualizarGraficos(T, where) {
-  const key = $('sel-grafico').value;
+  const dims = estado.dimsGrafico;
+  const grupo = dims.length ? `concat_ws(' | ', ${dims.map(exprDim).join(', ')})` : `'Total'`;
   const somas = [0, 1, 2, 3, 4].map((k) => `SUM(rcd_${T}${k}) r${k}, SUM(und_${T}${k}) u${k}`).join(', ');
-  const linhas = await consultar(`SELECT d_${key} AS g, ${somas} FROM fato ${where} GROUP BY 1`);
-
-  // Os 10 maiores (pelo RCD do período atual) ganham cor própria; o resto vira "Outros"
-  linhas.sort((a, b) => (b.r0 || 0) - (a.r0 || 0) || (b.u0 || 0) - (a.u0 || 0));
-  const principais = linhas.slice(0, MAX_SERIES);
-  const resto = linhas.slice(MAX_SERIES);
-  const grupos = principais.map((l, i) => ({ nome: l.g, linha: l, cor: CORES[i % CORES.length] }));
-  if (resto.length) {
-    const soma = { g: 'Outros' };
-    for (const p of ['r', 'u']) for (let k = 0; k <= 4; k++) soma[p + k] = resto.reduce((s, l) => s + (l[p + k] || 0), 0);
-    grupos.push({ nome: 'Outros', linha: soma, cor: COR_OUTROS });
-  }
-
-  const eixoX = [`${T}-4`, `${T}-3`, `${T}-2`, `${T}-1`, T];
-  desenharGrafico('grafico-rcd', grupos, 'r', eixoX);
-  desenharGrafico('grafico-und', grupos, 'u', eixoX);
+  const linhas = await consultar(`SELECT ${grupo} AS g, ${somas} FROM fato ${where} GROUP BY 1`);
+  ultimoGrafico = { linhas, T };
+  desenharGraficos();
 }
 
-function desenharGrafico(id, grupos, prefixo, eixoX) {
+function desenharGraficos() {
+  if (!ultimoGrafico) return;
+  const { linhas, T } = ultimoGrafico;
+  const regra = aplicarExibicao(linhas);
+  let manter = regra.manter;
+  let outros = regra.outros;
+  let nota = regra.escondidos ? `${inteiro(regra.escondidos)} itens fora do Top N não aparecem.` : '';
+  if (manter.length > MAX_SERIES) { // segurança: centenas de cores travariam o gráfico
+    outros = [...manter.slice(MAX_SERIES), ...outros];
+    manter = manter.slice(0, MAX_SERIES);
+    nota = `Mostrando os ${MAX_SERIES} maiores; os demais estão em "Outros".`;
+  }
+  const grupos = manter.map((l, i) => ({ nome: l.g, linha: l, cor: CORES[i % CORES.length] }));
+  if (outros.length) {
+    const soma = { g: 'Outros' };
+    for (const l of outros) somarCampos(soma, l, CAMPOS_GRAFICO);
+    grupos.push({ nome: 'Outros', linha: soma, cor: COR_OUTROS });
+  }
+  // o total escrito acima da barra é sempre 100% dos dados filtrados
+  const totalGeral = somarCampos({}, {}, CAMPOS_GRAFICO);
+  for (const l of linhas) somarCampos(totalGeral, l, CAMPOS_GRAFICO);
+
+  const eixoX = [`${T}-4`, `${T}-3`, `${T}-2`, `${T}-1`, T];
+  desenharGrafico('grafico-rcd', grupos, 'r', eixoX, totalGeral);
+  desenharGrafico('grafico-und', grupos, 'u', eixoX, totalGeral);
+  $('nota-grafico').textContent = nota;
+}
+
+function desenharGrafico(id, grupos, prefixo, eixoX, totalGeral) {
   const el = $(id);
   if (!estado.graficos[id]) estado.graficos[id] = echarts.init(el);
   const grafico = estado.graficos[id];
 
   const valores = grupos.map((g) => [4, 3, 2, 1, 0].map((k) => g.linha[prefixo + k] || 0));
-  const totais = [0, 1, 2, 3, 4].map((i) => valores.reduce((s, v) => s + v[i], 0));
+  const totais = [4, 3, 2, 1, 0].map((k) => totalGeral[prefixo + k] || 0);
 
   const series = grupos.map((g, gi) => ({
     name: g.nome,
@@ -583,16 +703,20 @@ function desenharGrafico(id, grupos, prefixo, eixoX) {
     legend: {
       type: 'scroll', orient: 'vertical', right: 6, top: 'middle',
       data: grupos.map((g) => g.nome),
-      formatter: (n) => (n.length > 24 ? n.slice(0, 23) + '…' : n),
+      formatter: (n) => (n.length > 28 ? n.slice(0, 27) + '…' : n),
       textStyle: { fontSize: 11 },
     },
-    grid: { left: 50, right: 170, top: 30, bottom: 30 },
+    grid: { left: 50, right: 190, top: 30, bottom: 30 },
     xAxis: { type: 'category', data: eixoX },
-    yAxis: { type: 'value', max: (v) => v.max * 1.12, axisLabel: { formatter: abreviar } },
+    yAxis: { type: 'value', max: (v) => Math.max(v.max, ...totais) * 1.12, axisLabel: { formatter: abreviar } },
     series,
   }, true);
   grafico.resize();
 }
+
+// ----- Tabela (matriz com níveis) -----
+const CAMPOS_TABELA = ['r0', 'r1', 'r4', 'u0', 'u1', 'u4', 'd0'];
+const SEP = '\u0001'; // separador interno do "caminho" de cada linha
 
 const COLUNAS_TABELA = (T) => [
   { id: 'r0', titulo: `RCD ${T}`, tipo: 'num', cor: '#6B76A6' },
@@ -606,77 +730,157 @@ const COLUNAS_TABELA = (T) => [
   { id: 'cgU', titulo: 'CAGR 5Y UND', tipo: 'var' },
 ];
 
+function novoNo(nome, nivel, caminho) {
+  const no = { nome, nivel, caminho, filhos: new Map() };
+  for (const c of CAMPOS_TABELA) no[c] = 0;
+  return no;
+}
+
+// MS% sempre sobre o total geral filtrado
+function completarNo(no, total) {
+  no.msR = divisao(no.r0, total.r0);
+  no.msU = divisao(no.u0, total.u0);
+  no.msD = divisao(no.d0, total.d0);
+  no.evR = evolucao(no.r0, no.r1);
+  no.cgR = cagr(no.r0, no.r4);
+  no.evU = evolucao(no.u0, no.u1);
+  no.cgU = cagr(no.u0, no.u4);
+}
+
 let ultimaTabela = null;
 async function atualizarTabela(T, where) {
-  const key = $('sel-tabela').value;
-  const expr = key === '__prodcorp' ? `d_produto || ' (' || sigla || ')'` : `d_${key}`;
-  const rotulo = key === '__prodcorp' ? 'Produto Corp' : estado.dims.find((d) => d.key === key).rotulo;
-  const linhas = await consultar(`SELECT ${expr} AS nome,
+  const dims = estado.dimsTabela;
+  const grupos = dims.map((k, i) => `${exprDim(k)} AS g${i}`);
+  const linhas = await consultar(`SELECT ${grupos.length ? grupos.join(', ') + ',' : ''}
       SUM(rcd_${T}0) r0, SUM(rcd_${T}1) r1, SUM(rcd_${T}4) r4,
       SUM(und_${T}0) u0, SUM(und_${T}1) u1, SUM(und_${T}4) u4,
       SUM(dos_${T}0) d0
-    FROM fato ${where} GROUP BY 1`);
+    FROM fato ${where} ${grupos.length ? 'GROUP BY ALL' : ''}`);
 
-  const soma = (c) => linhas.reduce((s, l) => s + (l[c] || 0), 0);
-  const total = { nome: 'Total' };
-  for (const c of ['r0', 'r1', 'r4', 'u0', 'u1', 'u4', 'd0']) total[c] = soma(c);
-  const completar = (l) => {
-    l.msR = divisao(l.r0, total.r0);
-    l.msU = divisao(l.u0, total.u0);
-    l.msD = divisao(l.d0, total.d0);
-    l.evR = evolucao(l.r0, l.r1);
-    l.cgR = cagr(l.r0, l.r4);
-    l.evU = evolucao(l.u0, l.u1);
-    l.cgU = cagr(l.u0, l.u4);
-    return l;
-  };
-  linhas.forEach(completar);
-  completar(total);
-  ultimaTabela = { linhas, total, rotulo, T };
+  // monta a árvore: cada nível soma os valores dos níveis abaixo
+  const raiz = novoNo('Total', -1, '');
+  for (const l of linhas) {
+    let no = raiz;
+    somarCampos(raiz, l, CAMPOS_TABELA);
+    dims.forEach((_, i) => {
+      const valor = l['g' + i];
+      let filho = no.filhos.get(valor);
+      if (!filho) { filho = novoNo(valor, i, no.caminho + SEP + valor); no.filhos.set(valor, filho); }
+      somarCampos(filho, l, CAMPOS_TABELA);
+      no = filho;
+    });
+  }
+  const completarTudo = (no) => { completarNo(no, raiz); no.filhos.forEach(completarTudo); };
+  completarTudo(raiz);
+  ultimaTabela = { raiz, T, dims: [...dims] };
   desenharTabela();
 }
 
-function desenharTabela() {
-  if (!ultimaTabela) return;
-  const { linhas, total, rotulo, T } = ultimaTabela;
-  const colunas = COLUNAS_TABELA(T);
+function ordenarIrmaos(lista) {
   const { col, desc } = estado.ordem;
-
-  const ordenadas = [...linhas].sort((a, b) => {
-    if (col === 'nome') return desc ? String(b.nome).localeCompare(a.nome, 'pt-BR') : String(a.nome).localeCompare(b.nome, 'pt-BR');
+  return lista.sort((a, b) => {
+    if (col === 'nome') return (desc ? -1 : 1) * String(a.nome).localeCompare(String(b.nome), 'pt-BR');
     const va = valido(a[col]) ? a[col] : -Infinity;
     const vb = valido(b[col]) ? b[col] : -Infinity;
     return desc ? vb - va : va - vb;
   });
-  const visiveis = ordenadas.slice(0, MAX_LINHAS_TABELA);
+}
 
+// Lista os filhos visíveis de um nó: regra de exibição, ordenação e "Outros" no fim
+function filhosVisiveis(no, raiz) {
+  const regra = aplicarExibicao([...no.filhos.values()]);
+  const lista = ordenarIrmaos(regra.manter);
+  if (regra.outros.length) {
+    const outros = novoNo('Outros', no.nivel + 1, no.caminho + SEP + '__outros__');
+    outros.ehOutros = true;
+    for (const f of regra.outros) somarCampos(outros, f, CAMPOS_TABELA);
+    completarNo(outros, raiz);
+    lista.push(outros);
+  }
+  return { lista, escondidos: regra.escondidos };
+}
+
+function desenharTabela() {
+  if (!ultimaTabela) return;
+  const { raiz, T, dims } = ultimaTabela;
+  const colunas = COLUNAS_TABELA(T);
+  const { col, desc } = estado.ordem;
+  const ultimoNivel = dims.length - 1;
+
+  // percorre a árvore, entrando só nas linhas abertas
+  const visiveis = [];
+  let escondidos = 0;
+  let cortou = false;
+  const percorrer = (no) => {
+    const { lista, escondidos: e } = filhosVisiveis(no, raiz);
+    escondidos += e;
+    for (const f of lista) {
+      if (visiveis.length >= MAX_LINHAS_TABELA) { cortou = true; return; }
+      visiveis.push(f);
+      if (!f.ehOutros && f.nivel < ultimoNivel && estado.expandidos.has(f.caminho)) percorrer(f);
+    }
+  };
+  if (dims.length) percorrer(raiz);
+
+  // barras de dados proporcionais ao maior valor de cada nível
   const maximos = {};
-  for (const c of colunas) if (c.cor) maximos[c.id] = Math.max(0, ...linhas.map((l) => (valido(l[c.id]) ? l[c.id] : 0)));
+  for (const l of visiveis) {
+    for (const c of colunas) {
+      if (!c.cor || l.ehOutros) continue;
+      const chave = c.id + '|' + l.nivel;
+      maximos[chave] = Math.max(maximos[chave] || 0, valido(l[c.id]) ? l[c.id] : 0);
+    }
+  }
 
   const celula = (l, c, comBarra) => {
     const v = l[c.id];
     const texto = c.tipo === 'num' ? inteiro(v) : percentual(v);
     const classe = c.tipo === 'var' ? classeSinal(v) : '';
-    if (comBarra && c.cor && maximos[c.id] > 0 && valido(v) && v > 0) {
-      const largura = Math.min(100, (v / maximos[c.id]) * 100);
+    const max = maximos[c.id + '|' + l.nivel];
+    if (comBarra && c.cor && max > 0 && valido(v) && v > 0) {
+      const largura = Math.min(100, (v / max) * 100);
       return `<td class="cel-barra ${classe}"><div class="barra" style="width:${largura}%;background:${c.cor}"></div><span>${texto}</span></td>`;
     }
     return `<td class="${classe}">${texto}</td>`;
   };
 
   const seta = (id) => (col === id ? (desc ? ' ▼' : ' ▲') : '');
+  const titulo = dims.length ? dims.map(rotuloDim).join(' › ') : '(sem dimensão)';
   const cabecalho = `<thead><tr>
-      <th data-col="nome" class="${col === 'nome' ? 'ordenada' : ''}">${escaparHtml(rotulo)}${seta('nome')}</th>
+      <th data-col="nome" class="${col === 'nome' ? 'ordenada' : ''}">${escaparHtml(titulo)}${seta('nome')}</th>
       ${colunas.map((c) => `<th data-col="${c.id}" class="${col === c.id ? 'ordenada' : ''}">${c.titulo}${seta(c.id)}</th>`).join('')}
     </tr></thead>`;
-  const corpo = '<tbody>' + visiveis.map((l) =>
-    `<tr><td>${escaparHtml(l.nome)}</td>${colunas.map((c) => celula(l, c, true)).join('')}</tr>`).join('') + '</tbody>';
-  const rodape = `<tfoot><tr><td>Total</td>${colunas.map((c) => celula(total, c, false)).join('')}</tr></tfoot>`;
+
+  estado.caminhosTabela = visiveis.map((l) => l.caminho);
+  const corpo = '<tbody>' + visiveis.map((l, i) => {
+    const podeAbrir = !l.ehOutros && l.nivel < ultimoNivel;
+    const aberto = estado.expandidos.has(l.caminho);
+    const botao = podeAbrir
+      ? `<button class="btn-exp" data-i="${i}" title="${aberto ? 'Recolher' : 'Expandir'}">${aberto ? '−' : '+'}</button>`
+      : '<span class="btn-exp-vazio"></span>';
+    return `<tr class="nivel-${Math.min(l.nivel, 3)}${l.ehOutros ? ' linha-outros' : ''}">
+      <td style="padding-left:${8 + l.nivel * 20}px">${botao}${escaparHtml(l.nome)}</td>
+      ${colunas.map((c) => celula(l, c, true)).join('')}</tr>`;
+  }).join('') + '</tbody>';
+  const rodape = `<tfoot><tr><td>Total</td>${colunas.map((c) => celula(raiz, c, false)).join('')}</tr></tfoot>`;
 
   $('tabela').innerHTML = cabecalho + corpo + rodape;
-  $('nota-tabela').textContent = linhas.length > visiveis.length
-    ? `Mostrando as primeiras ${inteiro(visiveis.length)} de ${inteiro(linhas.length)} linhas (o Total considera todas).`
-    : '';
+  document.querySelector('.barra-tabela').hidden = dims.length < 2;
+  const notas = [];
+  if (cortou) notas.push(`Mostrando as primeiras ${inteiro(MAX_LINHAS_TABELA)} linhas.`);
+  if (escondidos) notas.push(`${inteiro(escondidos)} linhas fora do Top N não aparecem.`);
+  if (notas.length) notas.push('O Total considera 100% dos dados filtrados.');
+  $('nota-tabela').textContent = notas.join(' ');
+}
+
+function expandirTudo() {
+  if (!ultimaTabela) return;
+  const { raiz, dims } = ultimaTabela;
+  const abrir = (no) => no.filhos.forEach((f) => {
+    if (f.nivel < dims.length - 1) { estado.expandidos.add(f.caminho); abrir(f); }
+  });
+  abrir(raiz);
+  desenharTabela();
 }
 
 // ---------------------------------------------------------------------
@@ -710,12 +914,20 @@ $('btn-trocar').addEventListener('click', () => {
 document.querySelectorAll('.aba').forEach((b) => b.addEventListener('click', () => trocarPagina(b.dataset.pagina)));
 $('btn-zerar').addEventListener('click', zerarFiltros);
 $('sel-tempo').addEventListener('change', atualizarAnalise);
-$('sel-grafico').addEventListener('change', () => atualizarGraficos($('sel-tempo').value, clausulaWhere(null)));
-$('sel-tabela').addEventListener('change', () => {
-  estado.ordem = { col: 'r0', desc: true };
-  atualizarTabela($('sel-tempo').value, clausulaWhere(null));
-});
+$('exib-topn').addEventListener('input', lerExibicao);
+$('exib-outros').addEventListener('change', lerExibicao);
+$('exib-80').addEventListener('change', lerExibicao);
+$('btn-expandir').addEventListener('click', expandirTudo);
+$('btn-recolher').addEventListener('click', () => { estado.expandidos = new Set(); desenharTabela(); });
 $('tabela').addEventListener('click', (e) => {
+  const botao = e.target.closest('.btn-exp');
+  if (botao) {
+    const caminho = estado.caminhosTabela[Number(botao.dataset.i)];
+    if (estado.expandidos.has(caminho)) estado.expandidos.delete(caminho);
+    else estado.expandidos.add(caminho);
+    desenharTabela();
+    return;
+  }
   const th = e.target.closest('th');
   if (!th) return;
   const col = th.dataset.col;
