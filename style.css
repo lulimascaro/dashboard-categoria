@@ -226,6 +226,7 @@ body {
 .leg-item:hover { background: #F3F2F1; }
 .leg-cor { width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0; }
 .leg-nome { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.leg-item.estatica { cursor: default; }
 .leg-item.oculta { color: #AAA; }
 .leg-item.oculta .leg-cor { background: #DDD !important; }
 .rodape-versao { text-align: right; font-size: 10px; color: #999; padding: 4px 16px 8px; }

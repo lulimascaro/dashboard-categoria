@@ -708,6 +708,17 @@ async function atualizarGraficos() {
 function desenharGraficos() {
   if (!ultimoGrafico) return;
   const { linhas, per } = ultimoGrafico;
+  if ($('sel-tipo').value === 'waterfall') {
+    const n = estado.exib.topN || 5;
+    desenharWaterfall('grafico-rcd', linhas, 'r_', per, n);
+    desenharWaterfall('grafico-und', linhas, 'u_', per, n);
+    desenharLegenda([
+      { nome: 'Total', cor: WF.total }, { nome: 'Aumento', cor: WF.aumento },
+      { nome: 'Queda', cor: WF.queda }, { nome: 'Outros', cor: WF.outros },
+    ], true);
+    $('nota-grafico').textContent = `Waterfall: em cada transição aparecem os ${n} itens de maior variação; o restante está em "Outros".`;
+    return;
+  }
   const campos = per.colunas.flatMap((_, i) => ['r_' + i, 'u_' + i]);
   const regra = aplicarExibicao(linhas);
   let manter = regra.manter;
@@ -736,9 +747,10 @@ function desenharGraficos() {
 }
 
 // Legenda única, compartilhada pelos dois gráficos (já vem ordenada pelo RCD, "Outros" no fim)
-function desenharLegenda(grupos) {
+function desenharLegenda(grupos, estatica = false) {
+  $('legenda')._estatica = estatica;
   $('legenda').innerHTML = grupos.map((g, i) =>
-    `<div class="leg-item${estado.ocultas.has(g.nome) ? ' oculta' : ''}" data-i="${i}" title="${escaparHtml(g.nome)}">
+    `<div class="leg-item${estatica ? ' estatica' : ''}${!estatica && estado.ocultas.has(g.nome) ? ' oculta' : ''}" data-i="${i}" title="${escaparHtml(g.nome)}">
       <span class="leg-cor" style="background:${g.cor}"></span><span class="leg-nome">${escaparHtml(g.nome)}</span>
     </div>`).join('');
   $('legenda')._grupos = grupos;
@@ -750,6 +762,84 @@ function alternarSerie(nome) {
   document.querySelectorAll('#legenda .leg-item').forEach((el) => {
     el.classList.toggle('oculta', estado.ocultas.has($('legenda')._grupos[Number(el.dataset.i)].nome));
   });
+}
+
+// ----- Waterfall ("Movimentações do Mercado") -----
+const WF = { total: '#6B76A6', aumento: '#3BAA4A', queda: '#D9534F', outros: '#F2C94C' };
+
+// Totais de cada período e, entre eles, a variação dos N itens que mais mudaram.
+// Truque clássico: uma barra invisível de "base" empilhada sob a barra visível.
+function desenharWaterfall(id, linhas, prefixo, per, n) {
+  const el = $(id);
+  if (!estado.graficos[id]) estado.graficos[id] = echarts.init(el);
+  const grafico = estado.graficos[id];
+  const ultimo = per.colunas.length - 1;
+  // no modo Mês usa só o primeiro e o último mês
+  const indices = per.mes ? [0, ultimo] : per.colunas.map((_, i) => i);
+  const total = (i) => linhas.reduce((s, l) => s + (l[prefixo + i] || 0), 0);
+
+  const barras = []; // { nome, base, altura, valor, cor, info }
+  indices.forEach((i, k) => {
+    const t = total(i);
+    barras.push({ nome: per.rotulos[i], base: 0, altura: t, valor: t, cor: WF.total, info: 'Total' });
+    if (k === indices.length - 1) return;
+    const j = indices[k + 1];
+    const transicao = `${per.rotulos[i]} → ${per.rotulos[j]}`;
+    const variacoes = linhas
+      .map((l) => ({ nome: l.g, d: (l[prefixo + j] || 0) - (l[prefixo + i] || 0) }))
+      .filter((v) => v.d !== 0)
+      .sort((a, b) => Math.abs(b.d) - Math.abs(a.d));
+    const itens = variacoes.slice(0, n).map((v) => ({ ...v, cor: v.d >= 0 ? WF.aumento : WF.queda }));
+    const resto = variacoes.slice(n);
+    if (resto.length) itens.push({ nome: 'Outros', d: resto.reduce((s, v) => s + v.d, 0), cor: WF.outros });
+    let nivel = t;
+    for (const it of itens) {
+      barras.push({ nome: it.nome, base: Math.min(nivel, nivel + it.d), altura: Math.abs(it.d), valor: it.d, cor: it.cor, info: transicao });
+      nivel += it.d;
+    }
+  });
+
+  const curto = (s) => (s.length > 16 ? s.slice(0, 15) + '…' : s);
+  // o eixo começa um pouco abaixo do menor nível, para as variações ficarem visíveis
+  const menorNivel = Math.min(...barras.map((b) => (b.info === 'Total' ? b.valor : b.base)));
+  let minimo = 0;
+  if (menorNivel > 0) {
+    const passo = Math.pow(10, Math.floor(Math.log10(menorNivel * 0.85)) - 1);
+    minimo = Math.floor((menorNivel * 0.85) / passo) * passo;
+  }
+  const vertical = barras.length > 14;
+  grafico.setOption({
+    animation: false,
+    tooltip: {
+      trigger: 'item',
+      formatter: (p) => {
+        const b = barras[p.dataIndex];
+        return `${escaparHtml(b.nome)}<br>${escaparHtml(b.info)}: <b>${inteiro(b.valor)}</b>`;
+      },
+    },
+    grid: { left: 50, right: 15, top: 30, bottom: 95 },
+    xAxis: {
+      type: 'category', data: barras.map((b) => b.nome), triggerEvent: true,
+      axisLabel: { rotate: 45, fontSize: 10, interval: 0, formatter: curto },
+    },
+    yAxis: { type: 'value', min: minimo, max: (v) => v.max + (v.max - minimo) * 0.12, axisLabel: { formatter: abreviar } },
+    series: [
+      { type: 'bar', stack: 'wf', silent: true, itemStyle: { color: 'rgba(0,0,0,0)' }, tooltip: { show: false },
+        data: barras.map((b) => b.base) },
+      { type: 'bar', stack: 'wf', barMaxWidth: 40, barCategoryGap: '25%',
+        data: barras.map((b) => ({ value: b.altura, itemStyle: { color: b.cor } })),
+        label: {
+          show: true, position: 'top', fontSize: vertical ? 9 : 10, color: '#2B2B2B',
+          rotate: vertical ? 90 : 0, align: vertical ? 'left' : 'center', verticalAlign: 'middle', distance: 4,
+          formatter: (p) => abreviar(barras[p.dataIndex].valor),
+        } },
+    ],
+  }, true);
+  // nome completo ao passar o mouse no rótulo do eixo
+  grafico.off('mouseover'); grafico.off('mouseout');
+  grafico.on('mouseover', (e) => { if (e.componentType === 'xAxis') el.title = e.value; });
+  grafico.on('mouseout', (e) => { if (e.componentType === 'xAxis') el.title = ''; });
+  grafico.resize();
 }
 
 // texto escuro sobre cores claras e branco sobre cores escuras
@@ -1163,7 +1253,7 @@ $('tabela').addEventListener('click', (e) => {
 });
 $('legenda').addEventListener('click', (e) => {
   const item = e.target.closest('.leg-item');
-  if (item) alternarSerie($('legenda')._grupos[Number(item.dataset.i)].nome);
+  if (item && !$('legenda')._estatica) alternarSerie($('legenda')._grupos[Number(item.dataset.i)].nome);
 });
 
 // versão em uso (vem do "?v=" no index.html), mostrada no rodapé
