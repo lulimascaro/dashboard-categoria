@@ -212,7 +212,23 @@ body {
 .kpi-valor { font-size: 22px; font-weight: 700; margin-top: 2px; }
 
 .area-principal { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
-.graficos { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.graficos { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 200px; gap: 14px; }
+.card-legenda {
+  background: #fff; border-radius: 6px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.08);
+  display: flex; flex-direction: column; min-height: 0; height: 413px;
+}
+.card-legenda h3 { margin: 0; padding: 6px 12px; background: var(--cinza-escuro); color: var(--amarelo); font-size: 15px; }
+#legenda { flex: 1; overflow-y: auto; padding: 6px 4px; }
+.leg-item {
+  display: flex; align-items: center; gap: 7px; padding: 3px 6px; font-size: 12px;
+  cursor: pointer; border-radius: 3px; user-select: none;
+}
+.leg-item:hover { background: #F3F2F1; }
+.leg-cor { width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0; }
+.leg-nome { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.leg-item.oculta { color: #AAA; }
+.leg-item.oculta .leg-cor { background: #DDD !important; }
+.rodape-versao { text-align: right; font-size: 10px; color: #999; padding: 4px 16px 8px; }
 .card-grafico, .card-tabela {
   background: #fff; border-radius: 6px; overflow: hidden;
   box-shadow: 0 1px 3px rgba(0,0,0,.08);
@@ -273,4 +289,5 @@ body {
   .coluna-kpis { width: 100%; }
   #kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
   .graficos { grid-template-columns: 1fr; }
+  .card-legenda { height: auto; max-height: 260px; }
 }

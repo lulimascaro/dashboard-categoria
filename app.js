@@ -68,6 +68,7 @@ const estado = {
   exib: { topN: null, outros: false, auto80: false },
   meses: [],           // rótulos dos meses da base (ago-21, set-21, …)
   selecao: new Map(),  // linhas clicadas na tabela: caminho -> condição SQL
+  ocultas: new Set(),  // séries escondidas pela legenda (valem para os dois gráficos)
   graficos: {},
   arquivoAtual: null,
 };
@@ -730,7 +731,25 @@ function desenharGraficos() {
   const tipo = $('sel-tipo').value;
   desenharGrafico('grafico-rcd', grupos, 'r_', per, totalGeral, tipo);
   desenharGrafico('grafico-und', grupos, 'u_', per, totalGeral, tipo);
+  desenharLegenda(grupos);
   $('nota-grafico').textContent = nota;
+}
+
+// Legenda única, compartilhada pelos dois gráficos (já vem ordenada pelo RCD, "Outros" no fim)
+function desenharLegenda(grupos) {
+  $('legenda').innerHTML = grupos.map((g, i) =>
+    `<div class="leg-item${estado.ocultas.has(g.nome) ? ' oculta' : ''}" data-i="${i}" title="${escaparHtml(g.nome)}">
+      <span class="leg-cor" style="background:${g.cor}"></span><span class="leg-nome">${escaparHtml(g.nome)}</span>
+    </div>`).join('');
+  $('legenda')._grupos = grupos;
+}
+
+function alternarSerie(nome) {
+  if (estado.ocultas.has(nome)) estado.ocultas.delete(nome); else estado.ocultas.add(nome);
+  for (const g of Object.values(estado.graficos)) g.dispatchAction({ type: 'legendToggleSelect', name: nome });
+  document.querySelectorAll('#legenda .leg-item').forEach((el) => {
+    el.classList.toggle('oculta', estado.ocultas.has($('legenda')._grupos[Number(el.dataset.i)].nome));
+  });
 }
 
 // texto escuro sobre cores claras e branco sobre cores escuras
@@ -842,13 +861,13 @@ function desenharGrafico(id, grupos, prefixo, per, totalGeral, tipo) {
         return `${escaparHtml(p.seriesName)}<br>${p.name}: <b>${inteiro(bruto)}</b> (${percentual(fracao(bruto, p.dataIndex))})`;
       },
     },
+    // a legenda visível fica fora do gráfico (coluna à direita); esta só guarda o que está oculto
     legend: {
-      type: 'scroll', orient: 'vertical', right: 6, top: 'middle',
+      show: false,
       data: grupos.map((g) => g.nome),
-      formatter: (nome) => (nome.length > 28 ? nome.slice(0, 27) + '…' : nome),
-      textStyle: { fontSize: 11 },
+      selected: Object.fromEntries(grupos.map((g) => [g.nome, !estado.ocultas.has(g.nome)])),
     },
-    grid: { left: 50, right: 190, top: mes ? 50 : 30, bottom: mes ? 50 : 30 },
+    grid: { left: 50, right: mes ? 20 : 15, top: mes ? 50 : 30, bottom: mes ? 50 : 30 },
     labelLayout: mes ? { hideOverlap: true } : undefined,
     xAxis: {
       type: 'category', data: per.rotulos, boundaryGap: ehBarra || n === 1,
@@ -1142,4 +1161,12 @@ $('tabela').addEventListener('click', (e) => {
   const tr = e.target.closest('tbody tr');
   if (tr) clicarLinha(estado.linhasTabela[Number(tr.dataset.i)], e.ctrlKey || e.metaKey);
 });
+$('legenda').addEventListener('click', (e) => {
+  const item = e.target.closest('.leg-item');
+  if (item) alternarSerie($('legenda')._grupos[Number(item.dataset.i)].nome);
+});
+
+// versão em uso (vem do "?v=" no index.html), mostrada no rodapé
+$('versao').textContent = 'versão ' + (new URL(import.meta.url).searchParams.get('v') || 'local');
+
 window.addEventListener('resize', () => Object.values(estado.graficos).forEach((g) => g.resize()));

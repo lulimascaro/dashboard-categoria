@@ -30,6 +30,12 @@ Em alguns minutos o endereço do site aparece nessa mesma tela.
 > Abrir o `index.html` com dois cliques direto do computador não funciona
 > (o navegador bloqueia por segurança). Use o endereço do GitHub Pages.
 
+## Versão
+
+No `index.html`, os links do `app.js` e do `style.css` têm `?v=AAAAMMDD-N`.
+Atualize esse número a cada mudança: isso força o navegador a baixar a versão nova.
+O número aparece no rodapé do site.
+
 ## Arquivos
 
 | Arquivo | O que é |
