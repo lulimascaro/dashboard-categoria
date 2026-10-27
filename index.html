@@ -5,9 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dashboard de Mercado Farmacêutico</title>
   <!-- Ao publicar uma nova versão, atualize o número "?v=" nas duas linhas abaixo -->
-  <link rel="stylesheet" href="style.css?v=20261027-9">
+  <link rel="stylesheet" href="style.css?v=20261027-10">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
-  <script type="module" src="app.js?v=20261027-9"></script>
+  <script type="module" src="app.js?v=20261027-10"></script>
+  <script type="module" src="el.js?v=20261027-10"></script>
 </head>
 <body>
 
@@ -54,6 +55,7 @@
         <button class="aba" data-pagina="preco">Preço</button>
         <button class="aba" data-pagina="preco2">Preço 2</button>
         <button class="aba" data-pagina="preco3">Preço 3</button>
+        <button class="aba" data-pagina="el" title="Estudo de Lançamento">EL</button>
       </nav>
       <button class="botao-link" id="btn-trocar">Trocar arquivo</button>
     </header>
@@ -295,6 +297,30 @@
           </div>
         </div>
       </div>
+    </main>
+
+    <!-- Página 6: EL (Estudo de Lançamento) -->
+    <main id="pagina-el" class="pagina" hidden>
+      <div class="el-ferramentas">
+        <label class="botao botao-principal">📂 Importar EL (arquivo .html)
+          <input type="file" id="el-importar-html" accept=".html,.htm,text/html" multiple hidden>
+        </label>
+        <button type="button" class="botao botao-secundario" id="el-exemplo">Usar EL de exemplo</button>
+        <button type="button" class="botao-pequeno" id="el-exportar">⬇ Exportar ELs</button>
+        <label class="botao-pequeno">⬆ Importar ELs
+          <input type="file" id="el-importar-json" accept=".json,application/json" hidden>
+        </label>
+        <span class="el-aviso">🔒 As ELs ficam salvas só neste navegador. Exporte para não perder.</span>
+        <span id="el-aviso-salvar" class="el-erro"></span>
+      </div>
+      <div id="el-subabas" class="el-subabas"></div>
+      <div id="el-resumo" class="el-resumo" hidden></div>
+      <div id="el-vazio" class="el-vazio">
+        Nenhuma EL ainda. Importe um arquivo .html acima ou
+        <button type="button" class="botao-pequeno" id="el-nova-vazio">crie uma EL em branco</button>.
+      </div>
+      <div id="el-folha" class="el-folha"></div>
+      <div class="el-add"><button type="button" class="botao botao-principal" id="el-nova">+ Adicionar outro SKU (nova EL)</button></div>
     </main>
   </div>
 

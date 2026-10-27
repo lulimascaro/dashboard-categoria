@@ -716,6 +716,7 @@ function trocarPagina(pagina) {
   $('pagina-preco').hidden = pagina !== 'preco';
   $('pagina-preco2').hidden = pagina !== 'preco2';
   $('pagina-preco3').hidden = pagina !== 'preco3';
+  $('pagina-el').hidden = pagina !== 'el';
   if (pagina === 'analise') {
     if (estado.analisePendente) atualizarAnalise();
     else Object.values(estado.graficos).forEach((g) => g.resize());

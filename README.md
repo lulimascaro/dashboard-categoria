@@ -31,6 +31,15 @@ O RC de cada mês com Infoprice passa a ser a média das semanas do mês, e o RC
 
 O arquivo `exemplo_infoprice.csv` tem preços **fictícios** dos produtos do `exemplo.csv`, para teste.
 
+## Estudo de Lançamento (aba EL)
+
+A aba **EL** reproduz o formulário de Estudo de Lançamento com todos os campos editáveis e os
+cálculos atualizados enquanto se digita. Um arquivo `.html` no formato do `exemplo_el.html` pode ser
+importado (lido pelos rótulos das linhas e colunas). As ELs ficam **só no navegador**; use
+"Exportar ELs" (arquivo `.json`) como backup e "Importar ELs" para restaurar.
+
+O `exemplo_el.html` é **fictício**, apenas para teste.
+
 ## Como publicar no GitHub Pages
 
 No GitHub: **Settings → Pages → Build and deployment → Source: Deploy from a branch**,
@@ -55,3 +64,5 @@ O número aparece no rodapé do site.
 | `app.js` | Leitura do CSV, filtros, gráficos e tabela |
 | `exemplo.csv` | Dados fictícios para teste |
 | `exemplo_infoprice.csv` | Preços Infoprice fictícios para teste |
+| `el.js` | Aba EL (Estudo de Lançamento) |
+| `exemplo_el.html` | EL fictícia para teste |
