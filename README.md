@@ -78,6 +78,13 @@ Sell-out (Demanda UN, linha contínua) e Sell-in (Sell-In UN, linha tracejada).
 
 O `exemplo_el.html` é **fictício**, apenas para teste.
 
+## Copiar como imagem
+
+Todas as páginas (menos Filtros) têm o botão **📷 Copiar como imagem** na barra de seletores: ele copia
+os gráficos e tabelas da página (sem seletores e sem a coluna de KPIs), em resolução 2×, para colar no
+PowerPoint. Cada card de gráfico ou tabela também tem um ícone 📷 (aparece ao passar o mouse) que copia
+só aquele bloco. A imagem é gerada no próprio navegador; se ele não permitir copiar, um PNG é baixado.
+
 ## Como publicar no GitHub Pages
 
 No GitHub: **Settings → Pages → Build and deployment → Source: Deploy from a branch**,

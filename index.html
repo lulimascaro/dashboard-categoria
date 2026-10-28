@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dashboard de Mercado Farmacêutico</title>
   <!-- Ao publicar uma nova versão, atualize o número "?v=" nas duas linhas abaixo -->
-  <link rel="stylesheet" href="style.css?v=20261028-3">
+  <link rel="stylesheet" href="style.css?v=20261028-4">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
-  <script type="module" src="app.js?v=20261028-3"></script>
-  <script type="module" src="el.js?v=20261028-3"></script>
-  <script type="module" src="compilado.js?v=20261028-3"></script>
+  <script type="module" src="app.js?v=20261028-4"></script>
+  <script type="module" src="el.js?v=20261028-4"></script>
+  <script type="module" src="compilado.js?v=20261028-4"></script>
 </head>
 <body>
 
@@ -310,7 +310,6 @@
                   <option value="coluna">Por coluna</option>
                 </select>
               </label>
-              <button class="botao-pequeno" id="btn-copiar-port">📋 Copiar como imagem</button>
             </div>
             <div class="port-captura" id="port-captura">
               <h2 class="port-titulo" id="port-titulo">Portfólio</h2>
@@ -453,7 +452,7 @@
         </label>
         <label class="caixa-clara"><input type="checkbox" id="preco-volume" checked> Mostrar volume</label>
       </div>
-      <div class="preco-conteudo">
+      <div class="preco-conteudo" data-captura>
         <h2 id="preco-titulo"></h2>
         <div class="card-preco">
           <div id="grafico-preco"></div>
@@ -559,7 +558,7 @@
 
     <!-- Página 6: EL (Estudo de Lançamento) -->
     <main id="pagina-el" class="pagina" hidden>
-      <div class="el-ferramentas">
+      <div class="el-ferramentas" data-barra-captura>
         <label class="botao botao-principal">📂 Importar EL (arquivo .html)
           <input type="file" id="el-importar-html" accept=".html,.htm,text/html" multiple hidden>
         </label>
@@ -589,7 +588,7 @@
         Nenhuma EL ainda. Importe um arquivo .html acima ou
         <button type="button" class="botao-pequeno" id="el-nova-vazio">crie uma EL em branco</button>.
       </div>
-      <div id="el-folha" class="el-folha"></div>
+      <div id="el-folha" class="el-folha" data-captura></div>
       <div class="el-add"><button type="button" class="botao botao-principal" id="el-nova">+ Adicionar outro SKU (nova EL)</button></div>
     </main>
 
@@ -610,15 +609,15 @@
         <button type="button" class="botao-pequeno ec-imprimir" id="ec-imprimir">🖨 Imprimir / PDF</button>
       </div>
       <div class="ec-vazio" id="ec-vazio" hidden>Nenhuma EL ainda. Importe ou crie ELs na página <b>EL</b>.</div>
-      <div class="ec-folha" id="ec-folha">
+      <div class="ec-folha" id="ec-folha" data-captura>
         <div class="ec-cabecalho"><h2 id="ec-titulo">EL Compilado</h2><span id="ec-subtitulo"></span></div>
         <div class="ec-cards" id="ec-cards"></div>
         <div class="ec-graficos">
-          <div class="ec-g ec-g-linhas" id="ec-g-linhas"></div>
-          <div class="ec-g" id="ec-g-barras"></div>
+          <div class="ec-g ec-g-linhas"><div class="ec-g-in" id="ec-g-linhas"></div></div>
+          <div class="ec-g"><div class="ec-g-in" id="ec-g-barras"></div></div>
           <div class="ec-legenda-card"><h3>Legenda</h3><div id="ec-legenda"></div></div>
-          <div class="ec-g" id="ec-g-estoque"></div>
-          <div class="ec-g" id="ec-g-dias"></div>
+          <div class="ec-g"><div class="ec-g-in" id="ec-g-estoque"></div></div>
+          <div class="ec-g"><div class="ec-g-in" id="ec-g-dias"></div></div>
         </div>
         <table class="ec-tabela" id="ec-tabela"></table>
         <p class="ec-nota">Valores da Demanda e do Sell-In em milhares (k). Margem Bruta = Fat. Líquido − Sell-In UN × CPV; Margem de Contribuição = Margem Bruta − Investimento (Comercial + MKT). Share UN = Demanda das ELs ÷ (mercado filtrado + ELs); Ano 2 usa o mercado projetado (MAT+1). Clique numa linha da tabela para filtrar os gráficos (Ctrl+clique para várias).</p>

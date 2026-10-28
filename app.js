@@ -754,6 +754,7 @@ async function trocarPagina(pagina) {
   estado.pagina = pagina;
   try { localStorage.setItem(CHAVE_PAGINA, pagina); } catch { /* sem armazenamento */ }
   marcarMenu(pagina);
+  instalarCapturas(); // páginas/cards novos ganham o botão automaticamente
   $('pagina-filtros').hidden = pagina !== 'filtros';
   $('pagina-analise').hidden = pagina !== 'analise';
   $('pagina-lanc').hidden = pagina !== 'lanc';
@@ -3978,64 +3979,6 @@ $('port-leitura').addEventListener('input', () => {
   } catch { /* sem armazenamento */ }
 });
 
-// ----- Copiar como imagem (matriz + leitura) -----
-let promessaHtml2canvas = null;
-function carregarHtml2canvas() {
-  if (window.html2canvas) return Promise.resolve(window.html2canvas);
-  promessaHtml2canvas = promessaHtml2canvas || new Promise((ok, erro) => {
-    const sc = document.createElement('script');
-    sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
-    sc.onload = () => ok(window.html2canvas);
-    sc.onerror = () => { promessaHtml2canvas = null; erro(new Error('não foi possível carregar o gerador de imagem')); };
-    document.head.appendChild(sc);
-  });
-  return promessaHtml2canvas;
-}
-async function copiarImagemPort() {
-  const botao = $('btn-copiar-port');
-  const original = botao.textContent;
-  botao.disabled = true;
-  botao.textContent = 'Gerando imagem…';
-  try {
-    const h2c = await carregarHtml2canvas();
-    const alvo = $('port-captura');
-    const canvas = await h2c(alvo, {
-      backgroundColor: '#FFFFFF', scale: 2, logging: false,
-      // na cópia: matriz inteira (sem rolagem) e a Leitura como texto
-      onclone: (doc) => {
-        const c = doc.getElementById('port-captura');
-        c.classList.add('capturando');
-        const rol = doc.getElementById('port-rolagem');
-        rol.style.overflow = 'visible';
-        rol.style.maxHeight = 'none';
-        c.style.width = Math.max(alvo.clientWidth, $('tabela-port').scrollWidth + 40) + 'px';
-        const ta = doc.getElementById('port-leitura');
-        const div = doc.createElement('div');
-        div.className = 'port-leitura-texto';
-        div.textContent = $('port-leitura').value || ' ';
-        ta.replaceWith(div);
-      },
-    });
-    const blob = await new Promise((ok) => canvas.toBlob(ok, 'image/png'));
-    try {
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-      botao.textContent = '✓ Copiada! Cole no PowerPoint';
-    } catch {
-      // navegador sem permissão para copiar imagem: baixa o PNG
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = 'portfolio.png';
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-      botao.textContent = '⬇ PNG baixado';
-    }
-  } catch (e) {
-    console.error(e);
-    botao.textContent = 'Não foi possível gerar a imagem';
-  }
-  setTimeout(() => { botao.textContent = original; botao.disabled = false; }, 2500);
-}
-
 // ----- Exibição e controles -----
 function lerExibicaoPort() {
   const P = estado.port;
@@ -4069,7 +4012,6 @@ $('btn-expandir-port').addEventListener('click', () => {
 });
 $('btn-recolher-port').addEventListener('click', () => { estado.port.expandidos = new Set(); desenharMatrizPort(); });
 $('btn-limpar-selecao-port').addEventListener('click', () => selecionarPort(null));
-$('btn-copiar-port').addEventListener('click', copiarImagemPort);
 
 // =====================================================================
 // Lançamentos Mercado: só os produtos lançados no período escolhido,
@@ -4763,6 +4705,261 @@ $('tabela-lanc').addEventListener('click', (e) => {
 });
 
 // =====================================================================
+// "Copiar como imagem": uma única função para todas as páginas.
+// Cada página (menos Filtros) ganha o botão na barra de seletores e cada
+// card de gráfico/tabela ganha um ícone de câmera. A imagem é gerada no
+// próprio navegador (html2canvas) — nada é enviado a servidores.
+// Conteúdo da página: [data-captura] ou, se não houver, .area-principal.
+// =====================================================================
+const SELETOR_BLOCOS = '.card-grafico, .card-tabela, .card-preco, .card-p2, .ec-g, [data-captura-bloco]';
+const SELETOR_LEGENDAS = '.card-legenda, .ec-legenda-card, #p2-legenda';
+let promessaHtml2canvas = null;
+
+function carregarHtml2canvas() {
+  if (window.html2canvas) return Promise.resolve(window.html2canvas);
+  promessaHtml2canvas = promessaHtml2canvas || new Promise((ok, erro) => {
+    const sc = document.createElement('script');
+    sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+    sc.onload = () => ok(window.html2canvas);
+    sc.onerror = () => { promessaHtml2canvas = null; erro(new Error('não foi possível carregar o gerador de imagem')); };
+    document.head.appendChild(sc);
+  });
+  return promessaHtml2canvas;
+}
+
+// ----- textos do rodapé -----
+function resumoFiltros() {
+  const partes = [];
+  for (const d of estado.dims) {
+    const f = estado.filtros[d.key];
+    if (!filtroAtivo(f)) continue;
+    const v = [...f.valores];
+    const lista = v.slice(0, 3).join(', ') + (v.length > 3 ? ` (+${v.length - 3})` : '');
+    partes.push(`${d.rotulo}: ${f.modo === 'exc' ? 'todos exceto ' : ''}${lista}`);
+  }
+  let texto = partes.length ? partes.join('; ') : 'nenhum';
+  if (elLigado()) texto += ' · com ELs e MAT+1';
+  return texto;
+}
+// período: seletores da barra cujo nome é Período, Tempo, Lançados desde ou Horizonte
+function periodoDaPagina(main) {
+  const barra = main.querySelector(':scope > .barra-seletores');
+  if (!barra) return '';
+  const partes = [];
+  barra.querySelectorAll('label, .seletor, .lanc-faixa').forEach((l) => {
+    const primeiro = l.querySelector(':scope > span') || l.firstChild;
+    const nome = primeiro ? primeiro.textContent.trim().replace(/\s+/g, ' ') : '';
+    if (!/^(Período|Tempo|Lançados desde|Horizonte)/i.test(nome)) return;
+    const selects = [...l.querySelectorAll('select')];
+    const valores = selects.length ? selects.map((s) => (s.selectedOptions[0] || {}).text || '')
+      : [...l.querySelectorAll('input[type=text]')].map((i) => i.value);
+    if (valores.some(Boolean)) partes.push(`${nome} ${valores.filter(Boolean).join(' a ')}`);
+  });
+  return partes.join(', ');
+}
+function rodapeCaptura(main) {
+  const p = main ? periodoDaPagina(main) : '';
+  return [`Fonte: ${estado.nomeArquivo || '-'}`, p, `Filtros: ${resumoFiltros()}`].filter(Boolean).join(' · ');
+}
+
+// ----- aviso rápido -----
+function avisoRapido(texto) {
+  let t = $('aviso-rapido');
+  if (!t) { t = document.createElement('div'); t.id = 'aviso-rapido'; document.body.appendChild(t); }
+  t.textContent = texto;
+  t.classList.add('visivel');
+  clearTimeout(t._tempo);
+  t._tempo = setTimeout(() => t.classList.remove('visivel'), 2800);
+}
+
+// Figura 2× de um gráfico, desenhada numa cópia limpa (sem destaque do mouse nem tooltip)
+function imagemDoGrafico(inst, largura, altura) {
+  const div = document.createElement('div');
+  div.style.cssText = `position:absolute;left:-30000px;top:0;width:${largura}px;height:${altura}px`;
+  document.body.appendChild(div);
+  try {
+    const copia = echarts.init(div, null, { width: largura, height: altura });
+    copia.setOption({ ...inst.getOption(), animation: false });
+    const url = copia.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#FFFFFF' });
+    copia.dispose();
+    return url;
+  } catch {
+    return inst.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#FFFFFF' });
+  } finally {
+    div.remove();
+  }
+}
+
+// Copia de um elemento pronta para virar imagem: gráficos viram figuras em 2×,
+// campos levam o valor atual, áreas com rolagem mostram tudo (sem barras)
+function clonarParaCaptura(original) {
+  const clone = original.cloneNode(true);
+  const orig = [original, ...original.querySelectorAll('*')];
+  const copia = [clone, ...clone.querySelectorAll('*')];
+  const trocas = [];
+  orig.forEach((o, i) => {
+    const c = copia[i];
+    if (!c) return;
+    const est = getComputedStyle(o);
+    if (/(auto|scroll)/.test(est.overflowX + est.overflowY)) {
+      c.style.overflow = 'visible'; c.style.maxHeight = 'none'; c.style.height = 'auto';
+      // tabela mais larga que a tela: transborda para a direita (os cards em volta não cortam)
+      if (o.scrollWidth > o.clientWidth + 1 && !o.querySelector('[_echarts_instance_]')) {
+        for (let p = c.parentElement; p; p = p.parentElement) p.style.overflow = 'visible';
+      }
+    }
+    if (o.tagName === 'INPUT') {
+      if (o.type === 'checkbox' || o.type === 'radio') { if (o.checked) c.setAttribute('checked', ''); else c.removeAttribute('checked'); }
+      else c.setAttribute('value', o.value);
+    } else if (o.tagName === 'SELECT') {
+      [...c.options].forEach((op, k) => { if (k === o.selectedIndex) op.setAttribute('selected', ''); else op.removeAttribute('selected'); });
+    } else if (o.tagName === 'TEXTAREA') {
+      const div = document.createElement('div');
+      div.className = o.closest('.port-leitura') ? 'port-leitura-texto' : 'captura-texto';
+      div.textContent = o.value || ' ';
+      trocas.push([c, div]);
+    } else if (o.hasAttribute && o.hasAttribute('_echarts_instance_')) {
+      const inst = echarts.getInstanceByDom(o);
+      if (inst && o.clientWidth) {
+        const img = document.createElement('img');
+        img.src = imagemDoGrafico(inst, o.clientWidth, o.clientHeight);
+        img.style.cssText = `width:${o.clientWidth}px;height:${o.clientHeight}px;display:block`;
+        c.innerHTML = '';
+        c.appendChild(img);
+      }
+    } else if (o.tagName === 'CANVAS') {
+      const cv = c;
+      cv.width = o.width; cv.height = o.height;
+      try { cv.getContext('2d').drawImage(o, 0, 0); } catch { /* sem cópia */ }
+    }
+  });
+  trocas.forEach(([c, novo]) => c.replaceWith(novo));
+  return clone;
+}
+
+// largura do bloco: gráficos com rolagem horizontal alargam o layout todo;
+// tabelas largas só transbordam (os gráficos ficam no tamanho da tela)
+function larguraTotal(el) {
+  let extra = 0;
+  [el, ...el.querySelectorAll('*')].forEach((o) => {
+    if (o.scrollWidth > o.clientWidth + 1 && /(auto|scroll)/.test(getComputedStyle(o).overflowX) && o.querySelector('[_echarts_instance_]')) {
+      extra = Math.max(extra, o.scrollWidth - o.clientWidth);
+    }
+  });
+  return el.getBoundingClientRect().width + extra;
+}
+
+// elementos: blocos a capturar; lado = lado a lado (gráfico + legenda); nome = nome do PNG
+async function gerarImagem(elementos, { lado = false, main = null } = {}) {
+  const h2c = await carregarHtml2canvas();
+  const palco = document.createElement('div');
+  palco.className = 'captura-palco' + (lado ? ' lado' : '');
+  const larguras = elementos.map(larguraTotal);
+  palco.style.width = (lado ? larguras.reduce((s, l) => s + l, 0) + 12 * (elementos.length - 1) : Math.max(...larguras)) + 28 + 'px';
+  const corpo = document.createElement('div');
+  corpo.className = 'captura-corpo';
+  elementos.forEach((el, i) => {
+    const c = clonarParaCaptura(el);
+    if (lado) { c.style.width = larguras[i] + 'px'; c.style.flex = 'none'; }
+    // conteúdo da página sem a barra de seletores e sem a coluna de KPIs
+    c.querySelectorAll('.barra-seletores, .coluna-kpis, [data-barra-captura]').forEach((x) => x.remove());
+    corpo.appendChild(c);
+  });
+  palco.appendChild(corpo);
+  const rodape = document.createElement('div');
+  rodape.className = 'captura-rodape';
+  rodape.textContent = rodapeCaptura(main);
+  palco.appendChild(rodape);
+  (main || document.body).appendChild(palco); // dentro da página: mantém os estilos dela
+  try {
+    await new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok)));
+    // tamanho total, inclusive o que transborda (tabelas largas)
+    const largura = Math.max(palco.offsetWidth, palco.scrollWidth + 14);
+    const altura = Math.max(palco.offsetHeight, palco.scrollHeight);
+    const canvas = await h2c(palco, { backgroundColor: '#FFFFFF', scale: 2, logging: false, useCORS: true, width: largura, height: altura });
+    return await new Promise((ok) => canvas.toBlob(ok, 'image/png'));
+  } finally {
+    palco.remove();
+  }
+}
+
+// Gera, copia para a área de transferência e, se não der, baixa o PNG
+async function copiarComoImagem(elementos, opcoes = {}) {
+  const pagina = (PAGINAS.find(([p]) => p === estado.pagina) || ['', 'pagina'])[1];
+  const data = new Date();
+  const nome = `${pagina.replace(/\s+/g, '_')}_${data.getFullYear()}-${String(data.getMonth() + 1).padStart(2, '0')}-${String(data.getDate()).padStart(2, '0')}.png`;
+  avisoRapido('Gerando imagem…');
+  const promessa = gerarImagem(elementos, opcoes);
+  promessa.catch(() => {}); // o erro é tratado abaixo
+  try {
+    // a cópia precisa começar ainda no clique: entrega a imagem como promessa
+    if (!navigator.clipboard || !window.ClipboardItem) throw new Error('sem área de transferência');
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': promessa })]);
+    avisoRapido('Imagem copiada — cole com Ctrl+V');
+  } catch {
+    try {
+      const blob = await promessa;
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = nome;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+      avisoRapido(`O navegador não deixou copiar: imagem baixada (${nome})`);
+    } catch (e) {
+      console.error(e);
+      avisoRapido('Não foi possível gerar a imagem');
+    }
+  }
+}
+
+// conteúdo principal de uma página
+function conteudoDaPagina(main) {
+  return main.querySelector('[data-captura]') || main.querySelector('.area-principal') || main;
+}
+// legenda compartilhada perto de um card de gráfico (até 3 níveis acima)
+function legendaDoBloco(card) {
+  if (!card.querySelector('[_echarts_instance_]') && !card.matches('.ec-g')) return null;
+  let p = card.parentElement;
+  for (let k = 0; k < 3 && p; k++, p = p.parentElement) {
+    const leg = [...p.querySelectorAll(SELETOR_LEGENDAS)].find((l) => !l.contains(card) && !card.contains(l));
+    if (leg) return leg;
+  }
+  return null;
+}
+
+// Instala o botão de cada página e o ícone de cada card (pode ser chamada várias vezes)
+function instalarCapturas() {
+  document.querySelectorAll('main.pagina').forEach((main) => {
+    if (main.id === 'pagina-filtros') return;
+    const barra = main.querySelector(':scope > .barra-seletores') || main.querySelector('[data-barra-captura]');
+    if (barra && !barra.querySelector('.btn-captura-pagina')) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'btn-captura-pagina';
+      b.innerHTML = '📷 Copiar como imagem';
+      b.title = 'Copia os gráficos e tabelas desta página (sem seletores e KPIs)';
+      b.addEventListener('click', () => copiarComoImagem([conteudoDaPagina(main)], { main }));
+      barra.appendChild(b);
+    }
+    main.querySelectorAll(SELETOR_BLOCOS).forEach((card) => {
+      if (card.querySelector(':scope > .btn-captura-bloco')) return;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'btn-captura-bloco';
+      b.textContent = '📷';
+      b.title = 'Copiar este bloco como imagem';
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const leg = legendaDoBloco(card);
+        copiarComoImagem(leg ? [card, leg] : [card], { lado: !!leg, main });
+      });
+      card.classList.add('com-captura');
+      card.appendChild(b);
+    });
+  });
+}
+
+// =====================================================================
 // Menu de páginas (caixa suspensa "Página: …")
 // Filtros sempre em primeiro; páginas novas entram na lista abaixo.
 // =====================================================================
@@ -4802,5 +4999,6 @@ function marcarMenu(pagina) {
 }
 
 montarMenu(); // no fim do arquivo: a lista PAGINAS já existe
+instalarCapturas(); // botão "Copiar como imagem" em todas as páginas (menos Filtros)
 // caixa suspensa reaproveitada pela página EL Compilado (compilado.js)
 window.componentes = { criarSeletor: criarSeletorPreco };
