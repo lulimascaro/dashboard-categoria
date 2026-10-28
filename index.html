@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dashboard de Mercado Farmacêutico</title>
   <!-- Ao publicar uma nova versão, atualize o número "?v=" nas duas linhas abaixo -->
-  <link rel="stylesheet" href="style.css?v=20261028-1">
+  <link rel="stylesheet" href="style.css?v=20261028-2">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
-  <script type="module" src="app.js?v=20261028-1"></script>
-  <script type="module" src="el.js?v=20261028-1"></script>
-  <script type="module" src="compilado.js?v=20261028-1"></script>
+  <script type="module" src="app.js?v=20261028-2"></script>
+  <script type="module" src="el.js?v=20261028-2"></script>
+  <script type="module" src="compilado.js?v=20261028-2"></script>
 </head>
 <body>
 
@@ -437,13 +437,21 @@
             <option value="MATP" hidden>MAT+1 (projetado)</option>
           </select>
         </label>
-        <label>Ordenar por
-          <select id="preco-ordem">
-            <option value="unit">RCD R$/UND</option>
-            <option value="total">RCD total (R$)</option>
+        <label>Top N <input type="number" id="preco-topn" value="10" min="1" step="1"></label>
+        <label>Top N por
+          <select id="preco-topn-por">
+            <option value="rcd">RCD total</option>
+            <option value="und">UND total</option>
           </select>
         </label>
-        <label>Top N <input type="number" id="preco-topn" value="10" min="1" step="1"></label>
+        <label>Ordenar por
+          <select id="preco-ordem">
+            <option value="rcdU">RCD/UND</option>
+            <option value="pfU">PF/UND</option>
+            <option value="rcU">RC/UND</option>
+          </select>
+        </label>
+        <label class="caixa-clara"><input type="checkbox" id="preco-volume" checked> Mostrar volume</label>
       </div>
       <div class="preco-conteudo">
         <h2 id="preco-titulo"></h2>

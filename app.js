@@ -1675,15 +1675,14 @@ async function atualizarPreco() {
       ? a.rcDose * (concIdx.valor / c.valor) : null;
   }
 
-  // ordenação + Top N (o index sempre aparece)
-  const chave = $('preco-ordem').value === 'total' ? 'rcd' : 'rcdU';
-  const ordenar = (lst) => lst.sort((a, b) => (valido(b[chave]) ? b[chave] : -Infinity) - (valido(a[chave]) ? a[chave] : -Infinity));
-  ordenar(linhas);
+  // "Top N por" escolhe QUAIS apresentações entram (maiores pelo total do período);
+  // "Ordenar por" define a ORDEM das colunas (preço médio, do maior para o menor)
+  const desc = (campo) => (a, b) => (valido(b[campo]) ? b[campo] : -Infinity) - (valido(a[campo]) ? a[campo] : -Infinity);
   const n = Math.max(1, parseInt($('preco-topn').value, 10) || 10);
-  let itens = linhas.slice(0, n);
+  let itens = [...linhas].sort(desc($('preco-topn-por').value)).slice(0, n);
   // o index e os SKUs das ELs sempre aparecem, mesmo fora do Top N
-  const extras = linhas.filter((a) => (a === idx || a.el) && !itens.includes(a));
-  if (extras.length) itens = ordenar([...itens, ...extras]);
+  itens.push(...linhas.filter((a) => (a === idx || a.el) && !itens.includes(a)));
+  itens.sort(desc($('preco-ordem').value));
 
   ultimoPreco = { itens, idx, concIdx, periodo: descricaoPeriodo(), total: linhas.length };
   desenharPreco();
@@ -1713,13 +1712,59 @@ function desenharPreco() {
   const difPF = (a) => (valido(a.pfU) && valido(a.rcdU) && a.pfU - a.rcdU > 0 ? a.pfU - a.rcdU : null);
   const NOMES = ['RCD (cor da corporação)', 'PF - RCD (tom claro)', 'RC (preço ao consumidor)'];
 
+  // faixa de volume no topo (≈ 20% da altura): uma bolha por coluna com o total do período
+  const comVolume = $('preco-volume').checked;
+  const metrica = $('preco-topn-por').value; // 'rcd' ou 'und'
+  const nomeVol = metrica === 'rcd' ? 'RCD total' : 'UND total';
+  const ALTURA_BARRAS = 360;
+  const faixa = comVolume ? 92 : 0;
+  const TOPO = comVolume ? 34 : 60; // abaixo da legenda
+  el.style.height = TOPO + faixa + ALTURA_BARRAS + 'px';
+  const somaR = itens.reduce((s2, a) => s2 + (a.rcd || 0), 0);
+  const somaU = itens.reduce((s2, a) => s2 + (a.und || 0), 0);
+  const volumes = itens.map((a) => Math.max(0, a[metrica] || 0));
+  const vMin = Math.min(...volumes), vMax = Math.max(...volumes);
+  // diâmetro: o maior é no máximo 1,6× o menor; cabe na faixa e na largura da coluna
+  const dMin = Math.max(30, Math.min(46, largura * 0.62, (faixa - 12) / 1.6));
+  const diametro = (v) => dMin * (1 + 0.6 * (vMax > vMin ? (v - vMin) / (vMax - vMin) : 1));
+  const textoVol = (v) => {
+    if (metrica === 'rcd') return 'R$ ' + abreviar(v);
+    if (v >= 1e6) return fmt1.format(v / 1e6) + ' mi';
+    if (v >= 1e3) return fmt0.format(v / 1e3) + ' mil';
+    return fmt0.format(v);
+  };
+  const seriesVolume = comVolume ? [
+    { // linha fina pontilhada ligando as bolhas
+      type: 'line', xAxisIndex: 1, yAxisIndex: 1, silent: true, symbol: 'none', z: 1, tooltip: { show: false },
+      lineStyle: { color: '#AAB0BC', width: 1, type: 'dotted' }, data: itens.map(() => 0.5),
+    },
+    {
+      name: nomeVol, type: 'scatter', xAxisIndex: 1, yAxisIndex: 1, z: 3,
+      itemStyle: { color: '#E3E7EF', borderColor: '#6B76A6', borderWidth: 1 },
+      data: itens.map((a, i) => ({
+        value: [i, 0.5], symbolSize: diametro(volumes[i]),
+        itemStyle: a.ehIndex ? { borderColor: '#F2C94C', borderWidth: 2.5 } : undefined,
+      })),
+      label: { show: true, position: 'inside', color: '#1F2A44', fontSize: 9.5, fontWeight: 'bold', formatter: (p) => textoVol(volumes[p.dataIndex]) },
+    },
+  ] : [];
+
   g.setOption({
     animation: false,
-    legend: { left: 10, top: 6, itemWidth: 14, itemHeight: 10, textStyle: { fontSize: 11 }, data: NOMES },
+    legend: {
+      left: 10, top: 6, itemWidth: 14, itemHeight: 10, textStyle: { fontSize: 11 },
+      data: [...NOMES, ...(comVolume ? [{ name: nomeVol, icon: 'circle', itemStyle: { color: '#FFFFFF', borderColor: '#6B76A6', borderWidth: 1.5 } }] : [])],
+    },
     tooltip: {
       trigger: 'axis', axisPointer: { type: 'shadow' },
       formatter: (ps) => {
         const a = itens[ps[0].dataIndex];
+        if (ps[0].axisIndex === 1 || ps[0].seriesName === nomeVol) {
+          // bolha: totais e participação no total das colunas exibidas
+          return `<b>${escaparHtml(a.apres)}</b><br>
+            RCD total: <b>${reais(a.rcd)}</b> (${percentual(divisao(a.rcd, somaR))} das colunas exibidas)<br>
+            UND total: <b>${inteiro(a.und)}</b> (${percentual(divisao(a.und, somaU))} das colunas exibidas)`;
+        }
         const d = valido(a.pfU) && valido(a.rcdU) ? a.pfU - a.rcdU : null;
         return `<b>${escaparHtml(a.apres)}</b><br>${escaparHtml(a.corp)}<br>
           RCD/UND: <b>${reais(a.rcdU)}</b><br>
@@ -1728,13 +1773,26 @@ function desenharPreco() {
           <span style="color:${COR_RC}">RC/UND: <b>${reais(a.rcU)}</b></span>`;
       },
     },
-    grid: { left: LARGURA_ROTULO_PRECO, right: 0, top: 60, bottom: 6 },
-    xAxis: { type: 'category', data: itens.map((a) => a.apres), axisLabel: { show: false }, axisTick: { show: false } },
-    yAxis: {
-      type: 'value', axisLabel: { formatter: (v) => 'R$ ' + fmt0.format(v) },
-      max: (v) => v.max * 1.25,
-    },
+    // grade 0 = barras (embaixo); grade 1 = faixa das bolhas (em cima), mesmas colunas
+    grid: [
+      { left: LARGURA_ROTULO_PRECO, right: 0, top: TOPO + faixa, bottom: 6 },
+      { left: LARGURA_ROTULO_PRECO, right: 0, top: TOPO, height: Math.max(1, faixa - 8) },
+    ],
+    xAxis: [
+      { type: 'category', data: itens.map((a) => a.apres), axisLabel: { show: false }, axisTick: { show: false } },
+      { type: 'category', gridIndex: 1, data: itens.map((a) => a.apres), show: false },
+    ],
+    yAxis: [
+      { type: 'value', axisLabel: { formatter: (v) => 'R$ ' + fmt0.format(v) }, max: (v) => v.max * 1.25 },
+      { type: 'value', gridIndex: 1, min: 0, max: 1, show: false },
+    ],
+    // rótulo da faixa, à esquerda
+    graphic: comVolume ? [{
+      type: 'text', left: 12, top: TOPO + faixa / 2 - 14,
+      style: { text: `${nomeVol}\n(${periodo.curto})`, fill: '#555', font: '11px sans-serif', lineHeight: 14 },
+    }] : [],
     series: [
+      ...seriesVolume,
       { // borda tracejada nas colunas das ELs
         type: 'custom', silent: true, z: 1, tooltip: { show: false },
         data: itens.map((a, i) => (a.el ? [i, 0] : null)).filter(Boolean),
@@ -1825,6 +1883,7 @@ function desenharPreco() {
     [`Index RC vs ${nomeCurto(idx)}`, (a) => (valido(a.indexRc) ? fmt0.format(a.indexRc) : '-'), 'v-index'],
     ['RC por dose', (a) => reais(a.rcDose) + marcaIP(a.ip && valido(a.rcDose)), 'v-rc'],
     [`RC por ${concIdxTexto}`, (a) => reais(a.rcConc) + marcaIP(a.ip && valido(a.rcConc)), 'v-rc'],
+    [`RCD ${periodo.curto} (R$ mil)`, (a) => (a.rcd > 0 ? fmt1.format(a.rcd / 1000) : '-')],
     [`UND ${periodo.curto} (mil)`, (a) => (a.und > 0 ? fmt1.format(a.und / 1000) : '-')],
   ];
   const cabecalho = `<thead><tr><th class="preco-rotulo">Apresentação</th>${itens.map((a) => `
@@ -1853,7 +1912,8 @@ function indicesPeriodoPreco() {
   return Array.from({ length: k }, (_, j) => n - k + j);
 }
 
-['preco-periodo', 'preco-ordem'].forEach((id) => $(id).addEventListener('change', atualizarPreco));
+['preco-periodo', 'preco-ordem', 'preco-topn-por'].forEach((id) => $(id).addEventListener('change', atualizarPreco));
+$('preco-volume').addEventListener('change', desenharPreco);
 $('preco-topn').addEventListener('input', () => { clearTimeout(estado.tempoTopnPreco); estado.tempoTopnPreco = setTimeout(atualizarPreco, 300); });
 window.addEventListener('resize', () => { if (estado.graficoPreco && estado.pagina === 'preco') { estado.graficoPreco.resize(); desenharPreco(); } });
 

@@ -305,7 +305,7 @@ body {
 .preco-conteudo { padding: 14px 16px; }
 #preco-titulo { margin: 0 0 10px; font-size: 18px; color: #1F2A44; }
 .card-preco { background: #fff; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.08); overflow: hidden; }
-#grafico-preco { height: 420px; width: 100%; }
+#grafico-preco { height: 420px; width: 100%; } /* a altura muda com a faixa de volume */
 #tabela-preco { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12px; }
 #tabela-preco th {
   background: #1F2A44; color: #fff; padding: 6px 4px; text-align: center; vertical-align: top;
