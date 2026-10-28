@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dashboard de Mercado Farmacêutico</title>
   <!-- Ao publicar uma nova versão, atualize o número "?v=" nas duas linhas abaixo -->
-  <link rel="stylesheet" href="style.css?v=20261027-18">
+  <link rel="stylesheet" href="style.css?v=20261028-1">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
-  <script type="module" src="app.js?v=20261027-18"></script>
-  <script type="module" src="el.js?v=20261027-18"></script>
-  <script type="module" src="compilado.js?v=20261027-18"></script>
+  <script type="module" src="app.js?v=20261028-1"></script>
+  <script type="module" src="el.js?v=20261028-1"></script>
+  <script type="module" src="compilado.js?v=20261028-1"></script>
 </head>
 <body>
 
@@ -238,6 +238,90 @@
               <table id="tabela-par"></table>
             </div>
             <div id="nota-tabela-par"></div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Portfólio -->
+    <main id="pagina-port" class="pagina" hidden>
+      <div class="barra-seletores">
+        <div class="seletor"><span>Linhas</span><div class="dropdown" id="dd-linhas-port"></div></div>
+        <label>Colunas <select id="port-colunas"></select></label>
+        <div class="seletor"><span>Medida</span>
+          <div class="ec-alterna" id="port-medida">
+            <button type="button" data-medida="rcd" class="ativo">RCD</button>
+            <button type="button" data-medida="und">UND</button>
+            <button type="button" data-medida="preco">Preço (RCD/UND)</button>
+          </div>
+        </div>
+        <label>Período
+          <select id="port-periodo">
+            <option value="MAT0">MAT</option>
+            <option value="MAT1">MAT-1</option>
+            <option value="MAT2">MAT-2</option>
+            <option value="MAT3">MAT-3</option>
+            <option value="MAT4">MAT-4</option>
+            <option value="YTD0">YTD</option>
+            <option value="MATP" hidden>MAT+1 (projetado)</option>
+          </select>
+        </label>
+        <label>Mostrar como
+          <select id="port-mostrar">
+            <option value="valores">Valores</option>
+            <option value="linha">% da linha</option>
+            <option value="coluna">% da coluna</option>
+            <option value="total">% do total</option>
+          </select>
+        </label>
+        <label>Unidade
+          <select id="port-unidade">
+            <option value="auto">Automática</option>
+            <option value="mil">Mil</option>
+            <option value="mi">Mi</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="layout-analise">
+        <aside class="coluna-kpis">
+          <div id="kpis-port"></div>
+          <div class="exibicao">
+            <div class="exibicao-titulo">Exibição — linhas</div>
+            <label>Top N <input type="number" id="port-topn" min="1" step="1" placeholder="tudo"></label>
+            <label class="caixa"><input type="checkbox" id="port-outros"> Agrupar o restante como Outros</label>
+            <label class="caixa"><input type="checkbox" id="port-80"> Aglutinar automaticamente (80% da Medida)</label>
+            <div class="exibicao-titulo">Exibição — colunas</div>
+            <label>Top N colunas <input type="number" id="port-topn-col" min="1" step="1" placeholder="tudo"></label>
+            <label class="caixa"><input type="checkbox" id="port-outros-col"> Agrupar o restante como Outros</label>
+          </div>
+        </aside>
+        <div class="area-principal">
+          <div class="card-tabela">
+            <div class="barra-tabela">
+              <button class="botao-pequeno" id="btn-expandir-port">+ Expandir tudo</button>
+              <button class="botao-pequeno" id="btn-recolher-port">− Recolher tudo</button>
+              <button class="botao-pequeno botao-limpar" id="btn-limpar-selecao-port" hidden>✕ Limpar seleção</button>
+              <span id="dica-selecao-port"></span>
+              <label class="port-intensidade">Intensidade da cor
+                <select id="port-intensidade">
+                  <option value="tabela">Tabela toda</option>
+                  <option value="linha">Por linha</option>
+                  <option value="coluna">Por coluna</option>
+                </select>
+              </label>
+              <button class="botao-pequeno" id="btn-copiar-port">📋 Copiar como imagem</button>
+            </div>
+            <div class="port-captura" id="port-captura">
+              <h2 class="port-titulo" id="port-titulo">Portfólio</h2>
+              <div class="port-rolagem" id="port-rolagem"><table class="tabela-port" id="tabela-port"></table></div>
+              <div class="port-leitura">
+                <b>Leitura:</b>
+                <textarea id="port-leitura" rows="3" placeholder="Escreva aqui a conclusão (fica salva só neste navegador)"></textarea>
+              </div>
+              <div class="port-fonte" id="port-fonte"></div>
+            </div>
+            <div id="nota-port"></div>
           </div>
         </div>
       </div>

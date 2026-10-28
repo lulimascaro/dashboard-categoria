@@ -329,6 +329,7 @@ async function carregarArquivo(arquivo) {
     if (meses.length) info += ` · Período: ${rotuloMes(meses[0])} a ${rotuloMes(meses[meses.length - 1])}`;
     if (avisos.length) info += ` · ⚠ sem dados para ${avisos.join(', ')}`;
     $('info-arquivo').textContent = info;
+    estado.nomeArquivo = arquivo.name;
 
     prepararInterface();
     // arquivos Infoprice já carregados valem também para a nova base
@@ -425,6 +426,7 @@ function prepararInterface() {
   renderizarSeletores();
   prepararLanc();
   prepararPareto();
+  prepararPortfolio();
   prepararPreco();
   prepararPreco2();
   prepararPreco3();
@@ -565,6 +567,8 @@ async function atualizarTudo() {
   estado.lancPendente = true;
   estado.paretoPendente = true;
   if (estado.pagina === 'pareto') await atualizarPareto();
+  estado.portPendente = true;
+  if (estado.pagina === 'port') await atualizarPortfolio();
   if (estado.pagina === 'lanc') await atualizarLanc();
   if (estado.pagina === 'preco') await atualizarPreco();
   estado.preco2Pendente = true;
@@ -754,6 +758,7 @@ async function trocarPagina(pagina) {
   $('pagina-analise').hidden = pagina !== 'analise';
   $('pagina-lanc').hidden = pagina !== 'lanc';
   $('pagina-pareto').hidden = pagina !== 'pareto';
+  $('pagina-port').hidden = pagina !== 'port';
   $('pagina-preco').hidden = pagina !== 'preco';
   $('pagina-preco2').hidden = pagina !== 'preco2';
   $('pagina-preco3').hidden = pagina !== 'preco3';
@@ -764,6 +769,7 @@ async function trocarPagina(pagina) {
     if (estado.analisePendente) atualizarAnalise();
     else Object.values(estado.graficos).forEach((g) => g.resize());
   }
+  if (pagina === 'port' && estado.portPendente) atualizarPortfolio();
   if (pagina === 'pareto') {
     if (estado.paretoPendente) atualizarPareto();
     else desenharGraficoPareto();
@@ -2675,7 +2681,7 @@ async function aplicarInfoprice() {
     }
   }
   // todas as páginas recalculam com o RC novo
-  estado.analisePendente = estado.paretoPendente = estado.lancPendente = estado.precoPendente = estado.preco2Pendente = estado.preco3Pendente = true;
+  estado.analisePendente = estado.portPendente = estado.paretoPendente = estado.lancPendente = estado.precoPendente = estado.preco2Pendente = estado.preco3Pendente = true;
   desenharResumoIP();
 }
 
@@ -2929,7 +2935,7 @@ async function calcularSugestaoProj() {
 async function aposMudancaEL(reconstruir) {
   if (!estado.conn) return;
   if (reconstruir) await reconstruirEL();
-  estado.analisePendente = estado.paretoPendente = estado.lancPendente = estado.precoPendente = estado.preco2Pendente = estado.preco3Pendente = true;
+  estado.analisePendente = estado.portPendente = estado.paretoPendente = estado.lancPendente = estado.precoPendente = estado.preco2Pendente = estado.preco3Pendente = true;
   await atualizarTudo();
 }
 
@@ -3038,8 +3044,8 @@ function prepararPareto() {
 const colunaMedidaPareto = () => ({ rcd: 'r0', und: 'u0' }[$('par-medida').value] || 'v');
 
 // colunas do período escolhido: atual, anterior (Evol.) e 4 anos antes (CAGR)
-function periodoPareto() {
-  const p = $('par-periodo').value;
+const periodoPareto = () => periodoDe($('par-periodo').value);
+function periodoDe(p) {
   if (p === 'MATP') return { atual: 'MATP', ant: 'MAT0', base: 'MAT3', rot: 'MAT+1' };
   if (p === 'YTD0') return { atual: 'YTD0', ant: 'YTD1', base: 'YTD4', rot: 'YTD' };
   const k = Number(p.slice(3));
@@ -3066,30 +3072,16 @@ async function atualizarPareto() {
 }
 
 // ----- KPIs: os mesmos da página Gráfico e Tabela + os do Pareto -----
-async function atualizarKpisPareto() {
-  const per = periodoPareto();
-  const med = $('par-medida').value;
-  const where = whereParetoSel();
+// cards de RCD, UND e contagens de um período (iguais aos da página Gráfico e Tabela)
+async function cardsPeriodo(per, where) {
   const comVenda = `(COALESCE(${colExpr('rcd', per.atual)}, 0) <> 0 OR COALESCE(${colExpr('und', per.atual)}, 0) <> 0)`;
-  const dims = estado.par.dimsGrafico;
-  const grupo = dims.length ? `concat_ws(' | ', ${dims.map(exprDim).join(', ')})` : `'Total'`;
-  const [[k], itens] = await Promise.all([
-    consultar(`SELECT
-        ${somaPeriodo('rcd', per.atual)} r0, ${somaPeriodo('rcd', per.ant)} r1, ${somaPeriodo('rcd', per.base)} r4,
-        ${somaPeriodo('und', per.atual)} u0, ${somaPeriodo('und', per.ant)} u1, ${somaPeriodo('und', per.base)} u4,
-        COUNT(DISTINCT d_corp) FILTER (WHERE ${comVenda}) corps,
-        COUNT(DISTINCT d_produto) FILTER (WHERE ${comVenda}) marcas,
-        COUNT(DISTINCT sku) FILTER (WHERE ${comVenda}) skus
-      FROM fato ${where}`),
-    consultar(`SELECT ${grupo} AS g, ${somaPeriodo(med, per.atual)} AS v FROM fato ${where} GROUP BY 1`),
-  ]);
-  // Pareto dos itens do "Gráfico" (com a seleção da tabela, se houver)
-  const valores = itens.map((i) => Math.max(0, i.v || 0)).sort((a, b) => b - a);
-  const total = valores.reduce((s, v) => s + v, 0);
-  let acum = 0, nA = 0;
-  for (const v of valores) { if (total > 0 && acum / total < 0.8) nA++; acum += v; }
-  const nItens = valores.filter((v) => v > 0).length;
-  const top5 = valores.slice(0, 5).reduce((s, v) => s + v, 0);
+  const [k] = await consultar(`SELECT
+      ${somaPeriodo('rcd', per.atual)} r0, ${somaPeriodo('rcd', per.ant)} r1, ${somaPeriodo('rcd', per.base)} r4,
+      ${somaPeriodo('und', per.atual)} u0, ${somaPeriodo('und', per.ant)} u1, ${somaPeriodo('und', per.base)} u4,
+      COUNT(DISTINCT d_corp) FILTER (WHERE ${comVenda}) corps,
+      COUNT(DISTINCT d_produto) FILTER (WHERE ${comVenda}) marcas,
+      COUNT(DISTINCT sku) FILTER (WHERE ${comVenda}) skus
+    FROM fato ${where}`);
   const T = per.rot;
   const cards = [
     ['kpi-rcd', `RCD ${T}`, abreviar(k.r0)],
@@ -3101,13 +3093,36 @@ async function atualizarKpisPareto() {
     ['kpi-cont', '#Corporações', inteiro(k.corps)],
     ['kpi-cont', '#Marcas', inteiro(k.marcas)],
     ['kpi-cont', '#SKUs', inteiro(k.skus)],
+  ];
+  if (per.atual === 'MATP') cards.forEach((c) => { if (/MAT\+1/.test(c[1])) c[0] += ' kpi-proj'; });
+  return cards;
+}
+const htmlCards = (cards) => cards.map(([cls, rotulo, valor]) =>
+  `<div class="kpi ${cls}"><div class="kpi-rotulo">${rotulo}</div><div class="kpi-valor">${valor}</div></div>`).join('');
+
+async function atualizarKpisPareto() {
+  const per = periodoPareto();
+  const med = $('par-medida').value;
+  const where = whereParetoSel();
+  const dims = estado.par.dimsGrafico;
+  const grupo = dims.length ? `concat_ws(' | ', ${dims.map(exprDim).join(', ')})` : `'Total'`;
+  const [cards, itens] = await Promise.all([
+    cardsPeriodo(per, where),
+    consultar(`SELECT ${grupo} AS g, ${somaPeriodo(med, per.atual)} AS v FROM fato ${where} GROUP BY 1`),
+  ]);
+  // Pareto dos itens do "Gráfico" (com a seleção da tabela, se houver)
+  const valores = itens.map((i) => Math.max(0, i.v || 0)).sort((a, b) => b - a);
+  const total = valores.reduce((s, v) => s + v, 0);
+  let acum = 0, nA = 0;
+  for (const v of valores) { if (total > 0 && acum / total < 0.8) nA++; acum += v; }
+  const nItens = valores.filter((v) => v > 0).length;
+  const top5 = valores.slice(0, 5).reduce((s, v) => s + v, 0);
+  cards.push(
     ['kpi-pareto', 'Nº itens classe A', inteiro(total > 0 ? nA : null)],
     ['kpi-pareto', '% dos itens que fazem 80%', percentual(divisao(nA, nItens))],
     ['kpi-pareto', 'Concentração Top 5 (%)', percentual(divisao(top5, total))],
-  ];
-  if (per.atual === 'MATP') cards.forEach((c) => { if (/MAT\+1/.test(c[1])) c[0] += ' kpi-proj'; });
-  $('kpis-par').innerHTML = cards.map(([cls, rotulo, valor]) =>
-    `<div class="kpi ${cls}"><div class="kpi-rotulo">${rotulo}</div><div class="kpi-valor">${valor}</div></div>`).join('');
+  );
+  $('kpis-par').innerHTML = htmlCards(cards);
 }
 
 // ----- Gráfico -----
@@ -3489,6 +3504,496 @@ $('tabela-par').addEventListener('click', (e) => {
     alternarSelecaoPareto(linha.caminho, condicaoLinha(linha, P.tabela.dims), e.ctrlKey || e.metaKey);
   }
 });
+
+// =====================================================================
+// Portfólio: matriz Linhas × Colunas em mapa de calor, com caixa "Leitura"
+// e cópia como imagem. Respeita os filtros e as ELs.
+// =====================================================================
+const CHAVE_LEITURA = 'dashboard-farma:leitura:';
+const COR_CALOR_MIN = [0xEE, 0xF1, 0xF5]; // #EEF1F5
+const COR_CALOR_MAX = [0x1F, 0x2A, 0x44]; // #1F2A44
+const MAX_COLUNAS_PORT = 60; // segurança: acima disso o restante vira "Outros"
+const COL_OUTROS = '__outros__';
+const MEDIDAS_PORT = { rcd: 'RCD', und: 'UND', preco: 'Preço (RCD/UND)' };
+estado.port = {
+  dimsLinhas: [], expandidos: new Set(), selecao: null, ordem: { col: '__total', desc: true },
+  exib: { topN: null, outros: false, auto80: false }, exibCol: { topN: null, outros: false },
+  dados: null, linhas: [], colunas: [],
+};
+estado.portPendente = true;
+
+const medidaPort = () => document.querySelector('#port-medida button.ativo').dataset.medida;
+const periodoPort = () => periodoDe($('port-periodo').value);
+
+function prepararPortfolio() {
+  const P = estado.port;
+  const tem = (k) => estado.dims.some((d) => d.key === k);
+  P.dimsLinhas = tem('molecula') ? ['molecula'] : estado.dims.slice(0, 1).map((d) => d.key);
+  P.expandidos = new Set();
+  P.selecao = null;
+  P.ordem = { col: '__total', desc: true };
+  const base = estado.dims.map((d) => d.key);
+  montarSuspenso('dd-linhas-port', P.dimsLinhas, [...base, PRODUTO_CORP], () => {
+    P.expandidos = new Set();
+    atualizarPortfolio();
+  });
+  const sel = $('port-colunas');
+  sel.innerHTML = [...base, PRODUTO_CORP].map((k) => `<option value="${k}">${escaparHtml(rotuloDim(k))}</option>`).join('');
+  sel.value = tem('forma') ? 'forma' : base[Math.min(1, base.length - 1)];
+}
+
+// Filtros + o que foi clicado na matriz (só para os KPIs)
+function whereSelPort() {
+  const base = clausulaWhere(null);
+  const s = estado.port.selecao;
+  if (!s) return base;
+  return base ? `${base} AND ${s.cond}` : `WHERE ${s.cond}`;
+}
+
+async function atualizarPortfolio() {
+  estado.portPendente = false;
+  const P = estado.port;
+  const opcaoP = $('port-periodo').querySelector('option[value="MATP"]');
+  opcaoP.hidden = !elLigado();
+  if (!elLigado() && $('port-periodo').value === 'MATP') $('port-periodo').value = 'MAT0';
+  P.selecao = null;
+  const per = periodoPort();
+  const dims = P.dimsLinhas;
+  const colDim = $('port-colunas').value;
+  const grupos = dims.map((k, i) => `${exprDim(k)} AS g${i}`);
+  const linhas = await consultar(`SELECT ${grupos.length ? grupos.join(', ') + ',' : ''}
+      ${exprDim(colDim)} AS c, ${somaPeriodo('rcd', per.atual)} AS r, ${somaPeriodo('und', per.atual)} AS u
+    FROM fato ${clausulaWhere(null)} GROUP BY ALL`);
+  P.dados = { linhas, dims: [...dims], colDim, per };
+  carregarLeitura();
+  montarMatrizPort();
+  atualizarKpisPort();
+}
+
+async function atualizarKpisPort() {
+  $('kpis-port').innerHTML = htmlCards(await cardsPeriodo(periodoPort(), whereSelPort()));
+}
+
+// ----- árvore das linhas: cada nó guarda RCD e UND por coluna -----
+function noPort(nome, nivel, caminho, valores) {
+  return { nome, nivel, caminho, valores, filhos: new Map(), cols: new Map(), r: 0, u: 0 };
+}
+function somarNoPort(no, c, r, u) {
+  no.r += r; no.u += u;
+  const cel = no.cols.get(c) || { r: 0, u: 0 };
+  cel.r += r; cel.u += u;
+  no.cols.set(c, cel);
+}
+function juntarNoPort(destino, origem) {
+  origem.cols.forEach((v, c) => somarNoPort(destino, c, v.r, v.u));
+}
+// valor da medida: RCD, UND ou preço (RCD ÷ UND)
+function valorPort(o, med) {
+  if (!o) return null;
+  if (med === 'preco') return o.u > 0 ? o.r / o.u : null;
+  return med === 'rcd' ? o.r : o.u;
+}
+
+function montarMatrizPort() {
+  const P = estado.port;
+  if (!P.dados) return;
+  const { linhas, dims } = P.dados;
+  const raiz = noPort('Total', -1, '', []);
+  for (const l of linhas) {
+    const r = l.r || 0, u = l.u || 0;
+    somarNoPort(raiz, l.c, r, u);
+    let no = raiz;
+    dims.forEach((_, i) => {
+      const v = l['g' + i];
+      let filho = no.filhos.get(v);
+      if (!filho) { filho = noPort(v, i, no.caminho + SEP + v, [...no.valores, v]); no.filhos.set(v, filho); }
+      somarNoPort(filho, l.c, r, u);
+      no = filho;
+    });
+  }
+  P.raiz = raiz;
+  desenharMatrizPort();
+}
+
+// Colunas: ordenadas pelo total (desc.); Top N colunas + "Outros" sempre por último
+function colunasPort(raiz, med) {
+  const rank = med === 'preco' ? 'rcd' : med; // no Preço, a ordem/Top N segue o RCD
+  const todas = [...raiz.cols.entries()].map(([c, v]) => ({ c, v: valorPort(v, rank) || 0 }))
+    .sort((a, b) => b.v - a.v);
+  const { topN, outros } = estado.port.exibCol;
+  let n = topN ? Math.min(topN, todas.length) : todas.length;
+  let agrupar = !!topN && outros;
+  let nota = '';
+  if (n > MAX_COLUNAS_PORT) { n = MAX_COLUNAS_PORT; agrupar = true; nota = `Mostrando as ${MAX_COLUNAS_PORT} maiores colunas; as demais estão em "Outros".`; }
+  const manter = todas.slice(0, n).map((x) => ({ chave: x.c, nome: x.c }));
+  const resto = todas.slice(n).map((x) => x.c);
+  if (agrupar && resto.length) manter.push({ chave: COL_OUTROS, nome: 'Outros', membros: resto });
+  else if (resto.length) nota = `${inteiro(resto.length)} colunas fora do Top N não aparecem (o Total considera todas).`;
+  return { colunas: manter, nota };
+}
+// RCD/UND de um nó numa coluna (a coluna "Outros" soma as escondidas)
+function celulaPort(no, col) {
+  if (col.chave !== COL_OUTROS) return no.cols.get(col.chave) || null;
+  const s = { r: 0, u: 0 };
+  for (const c of col.membros) { const v = no.cols.get(c); if (v) { s.r += v.r; s.u += v.u; } }
+  return s;
+}
+
+function formatoPort(max, med, modo) {
+  if (modo !== 'valores') return { div: 1, sufixo: '', fmt: (v) => fmt1.format(v * 100) + '%' };
+  if (med === 'preco') return { div: 1, sufixo: 'R$/UND', fmt: (v) => fmt2.format(v) };
+  let u = $('port-unidade').value;
+  if (u === 'auto') u = max >= 1e6 ? 'mi' : max >= 1e3 ? 'mil' : '';
+  const div = u === 'mi' ? 1e6 : u === 'mil' ? 1e3 : 1;
+  const sufixo = u === 'mi' ? 'Mi' : u === 'mil' ? 'Mil' : (med === 'rcd' ? 'R$' : 'UND');
+  return { div, sufixo, fmt: div > 1 ? (v) => fmt2.format(v / div) : (v) => fmt0.format(v) };
+}
+
+function corCalor(t) {
+  const c = COR_CALOR_MIN.map((a, i) => Math.round(a + (COR_CALOR_MAX[i] - a) * t));
+  return `rgb(${c.join(',')})`;
+}
+
+function desenharMatrizPort() {
+  const P = estado.port;
+  if (!P.raiz) return;
+  const { dims, colDim, per } = P.dados;
+  const raiz = P.raiz;
+  const med = medidaPort();
+  const modo = med === 'preco' ? 'valores' : $('port-mostrar').value;
+  $('port-mostrar').disabled = med === 'preco';
+  const escopo = $('port-intensidade').value;
+  const { colunas, nota: notaCol } = colunasPort(raiz, med);
+  P.colunas = colunas;
+  const rank = med === 'preco' ? 'rcd' : med;
+  const totalGeral = valorPort(raiz, med);
+  const totColuna = new Map(colunas.map((c) => [c.chave, celulaPort(raiz, c)]));
+
+  // valor exibido conforme "Mostrar como"
+  const exibido = (no, cel, col) => {
+    const v = valorPort(cel, med);
+    if (!valido(v) || v === 0) return null;
+    if (modo === 'linha') return divisao(v, valorPort(no, med));
+    if (modo === 'coluna') return divisao(v, valorPort(totColuna.get(col.chave), med));
+    if (modo === 'total') return divisao(v, totalGeral);
+    return v;
+  };
+  const exibidoTotal = (no) => {
+    const v = valorPort(no, med);
+    if (!valido(v) || v === 0) return null;
+    if (modo === 'linha') return 1;
+    if (modo === 'coluna' || modo === 'total') return divisao(v, totalGeral);
+    return v;
+  };
+
+  // linhas visíveis: Top N / Outros / 80%, ordenação e +/-
+  const { col: ordCol, desc } = P.ordem;
+  const chaveOrdem = (no) => {
+    if (ordCol === '__total') return valorPort(no, med);
+    const col = colunas.find((c) => 'c:' + c.chave === ordCol);
+    return col ? valorPort(celulaPort(no, col), med) : null;
+  };
+  const visiveis = [];
+  let escondidos = 0;
+  let cortou = false;
+  const percorrer = (no) => {
+    const filhos = [...no.filhos.values()];
+    filhos.forEach((f) => { f.rank = valorPort(f, rank) || 0; });
+    // cor fixa de cada item: posição pelo total (como nos gráficos das outras páginas)
+    [...filhos].sort((a, b) => b.rank - a.rank).forEach((f, i) => { f.cor = CORES[i % CORES.length]; });
+    const regra = aplicarExibicao(filhos, P.exib, 'rank');
+    escondidos += regra.escondidos;
+    const lista = regra.manter.sort((a, b) => {
+      if (ordCol === '__nome') return (desc ? -1 : 1) * String(a.nome).localeCompare(String(b.nome), 'pt-BR', { numeric: true });
+      const va = chaveOrdem(a), vb = chaveOrdem(b);
+      const xa = valido(va) ? va : -Infinity, xb = valido(vb) ? vb : -Infinity;
+      return desc ? xb - xa : xa - xb;
+    });
+    if (regra.outros.length) {
+      const outros = noPort('Outros', no.nivel + 1, no.caminho + SEP + '__outros__', no.valores);
+      outros.ehOutros = true;
+      outros.membros = regra.outros.map((f) => f.nome);
+      outros.cor = COR_OUTROS;
+      for (const f of regra.outros) juntarNoPort(outros, f);
+      lista.push(outros);
+    }
+    for (const f of lista) {
+      if (visiveis.length >= MAX_LINHAS_TABELA) { cortou = true; return; }
+      visiveis.push(f);
+      if (!f.ehOutros && f.nivel < dims.length - 1 && P.expandidos.has(f.caminho)) percorrer(f);
+    }
+  };
+  if (dims.length) percorrer(raiz);
+  else visiveis.push(Object.assign(raiz, { nivel: 0, nome: 'Total', cor: CORES[0] }));
+  P.linhas = visiveis;
+
+  // valores exibidos e faixa do mapa de calor (tabela toda / por linha / por coluna, por nível)
+  const grade = visiveis.map((no) => colunas.map((c) => exibido(no, celulaPort(no, c), c)));
+  const faixas = new Map();
+  const chaveFaixa = (i, j) => (escopo === 'linha' ? 'l' + i : escopo === 'coluna' ? `c${j}|${visiveis[i].nivel}` : 'n' + visiveis[i].nivel);
+  grade.forEach((lin, i) => lin.forEach((v, j) => {
+    if (!valido(v)) return;
+    const k = chaveFaixa(i, j);
+    const f = faixas.get(k) || { min: Infinity, max: -Infinity };
+    f.min = Math.min(f.min, v); f.max = Math.max(f.max, v);
+    faixas.set(k, f);
+  }));
+  const maxAbs = Math.max(0, ...grade.flat().filter(valido), ...visiveis.map((no) => exibidoTotal(no) || 0));
+  const fmtP = formatoPort(maxAbs, med, modo);
+
+  // título e rótulos
+  const nomeLinhas = dims.length ? dims.map(rotuloDim).join(' › ') : '(sem linhas)';
+  const unidade = modo === 'linha' ? '% da linha' : modo === 'coluna' ? '% da coluna' : modo === 'total' ? '% do total' : fmtP.sufixo;
+  $('port-titulo').textContent = `${MEDIDAS_PORT[med]} ${per.rot} — ${nomeLinhas} × ${rotuloDim(colDim)} (${unidade})`;
+
+  const s = P.selecao;
+  const seta = (id) => (ordCol === id ? (desc ? ' ▼' : ' ▲') : '');
+  const ordenar = (id) => `<span class="port-ordenar" data-ordem="${id}" title="Ordenar">⇅</span>`;
+  const comMS = med !== 'preco';
+  const cab = `<thead><tr>
+      <th class="port-canto" data-ordem="__nome">${escaparHtml(nomeLinhas)}${seta('__nome')}</th>
+      ${colunas.map((c, j) => `<th class="port-col${s && s.col === c.chave && s.tipo !== 'linha' ? ' port-sel' : ''}" data-j="${j}" title="${escaparHtml(c.nome)}">
+        <span class="port-col-nome">${escaparHtml(c.nome)}</span>${seta('c:' + c.chave)}${ordenar('c:' + c.chave)}</th>`).join('')}
+      <th class="port-tot-cab" data-ordem="__total">Total${seta('__total')}</th>
+      ${comMS ? '<th class="port-tot-cab">MS%</th>' : ''}
+    </tr></thead>`;
+
+  const fmtCel = (v) => (valido(v) ? fmtP.fmt(v) : '');
+  const dica = (no, cel, col) => {
+    if (!cel || !(cel.r || cel.u)) return '';
+    const base = med === 'preco' ? 'rcd' : med;
+    const v = valorPort(cel, base);
+    const linhasD = [
+      `${no.nome} × ${col.nome}`,
+      `${MEDIDAS_PORT[med]}: ${med === 'preco' ? reais(valorPort(cel, 'preco')) : inteiro(valorPort(cel, med))}`,
+      `% da linha: ${percentual(divisao(v, valorPort(no, base)))}`,
+      `% da coluna: ${percentual(divisao(v, valorPort(totColuna.get(col.chave), base)))}`,
+      `% do total: ${percentual(divisao(v, valorPort(raiz, base)))}`,
+      `RCD/UND: ${reais(valorPort(cel, 'preco'))}`,
+    ];
+    if (med === 'preco') linhasD.splice(2, 0, `RCD: ${inteiro(cel.r)} · UND: ${inteiro(cel.u)}`);
+    return escaparHtml(linhasD.join('\n'));
+  };
+  const corpo = '<tbody>' + visiveis.map((no, i) => {
+    const podeAbrir = !no.ehOutros && no.nivel < dims.length - 1;
+    const aberto = P.expandidos.has(no.caminho);
+    const botao = podeAbrir
+      ? `<button class="btn-exp" data-i="${i}" title="${aberto ? 'Recolher' : 'Expandir'}">${aberto ? '−' : '+'}</button>`
+      : '<span class="btn-exp-vazio"></span>';
+    const linhaSel = s && s.tipo !== 'coluna' && s.caminho === no.caminho;
+    const celulas = colunas.map((c, j) => {
+      const v = grade[i][j];
+      const cel = celulaPort(no, c);
+      const selec = s && s.tipo === 'celula' && s.caminho === no.caminho && s.col === c.chave ? ' port-sel' : '';
+      if (!valido(v)) return `<td class="port-cel port-vazia${selec}" data-i="${i}" data-j="${j}"></td>`;
+      const f = faixas.get(chaveFaixa(i, j));
+      const t = f.max > f.min ? (v - f.min) / (f.max - f.min) : 1;
+      return `<td class="port-cel${selec}" data-i="${i}" data-j="${j}" title="${dica(no, cel, c)}"
+        style="background:${corCalor(t)};color:${t > 0.45 ? '#FFFFFF' : '#1F2A44'}">${fmtCel(v)}</td>`;
+    }).join('');
+    const tot = exibidoTotal(no);
+    return `<tr class="nivel-${Math.min(no.nivel, 3)}${no.ehOutros ? ' linha-outros' : ''}">
+      <td class="port-nome${linhaSel ? ' port-sel' : ''}" data-i="${i}" style="padding-left:${8 + no.nivel * 18}px">${botao}<span class="port-quad" style="background:${no.cor}"></span>${escaparHtml(no.nome)}</td>
+      ${celulas}
+      <td class="port-tot">${fmtCel(tot)}</td>
+      ${comMS ? `<td class="port-tot">${percentual(divisao(valorPort(no, med), totalGeral))}</td>` : ''}</tr>`;
+  }).join('') + '</tbody>';
+  const rodape = `<tfoot><tr><td>Total</td>
+    ${colunas.map((c) => {
+      const cel = totColuna.get(c.chave);
+      const v = valorPort(cel, med);
+      const x = !valido(v) || v === 0 ? null : modo === 'linha' ? divisao(v, totalGeral) : modo === 'coluna' ? 1 : modo === 'total' ? divisao(v, totalGeral) : v;
+      return `<td>${fmtCel(x)}</td>`;
+    }).join('')}
+    <td>${fmtCel(modo === 'valores' ? totalGeral : 1)}</td>${comMS ? `<td>${percentual(totalGeral ? 1 : null)}</td>` : ''}</tr></tfoot>`;
+  $('tabela-port').innerHTML = cab + corpo + rodape;
+
+  $('btn-expandir-port').hidden = $('btn-recolher-port').hidden = dims.length < 2;
+  $('btn-limpar-selecao-port').hidden = !s;
+  $('dica-selecao-port').textContent = s
+    ? `Cards filtrados por: ${s.rotulo}.`
+    : 'Clique numa célula, no nome de uma linha ou no cabeçalho de uma coluna para filtrar os cards. ⇅ no cabeçalho reordena as linhas.';
+  const notas = [];
+  if (notaCol) notas.push(notaCol);
+  if (cortou) notas.push(`Mostrando as primeiras ${inteiro(MAX_LINHAS_TABELA)} linhas.`);
+  if (escondidos) notas.push(`${inteiro(escondidos)} linhas fora do Top N não aparecem (o Total considera todas).`);
+  if (med === 'preco') notas.push('Preço = RCD ÷ UND de cada combinação; o Total é o preço médio ponderado.');
+  $('nota-port').textContent = notas.join(' ');
+  desenharRodapePort();
+}
+
+// rodapé: fonte e meses do período
+function desenharRodapePort() {
+  const per = periodoPort();
+  let ini = '', fim = '';
+  if (per.atual === 'MATP') { const p = rotulosProjetados(); ini = p[0]; fim = p[p.length - 1]; }
+  else {
+    const j = per.atual.startsWith('YTD') ? indicesJanela('YTD', 0) : indicesJanela('MAT', Number(per.atual.slice(3)));
+    if (j.length) { ini = estado.meses[j[0]]; fim = estado.meses[j[j.length - 1]]; }
+  }
+  $('port-fonte').textContent = `Fonte: ${estado.nomeArquivo || '-'} · ${per.rot} = ${ini || '?'} a ${fim || '?'}`;
+}
+
+// ----- clique: célula, linha ou coluna filtra os KPIs -----
+function condColunaPort(col) {
+  const e = exprDim(estado.port.dados.colDim);
+  return col.chave === COL_OUTROS ? `${e} IN (${col.membros.map(sqlTexto).join(', ')})` : `${e} = ${sqlTexto(col.chave)}`;
+}
+function selecionarPort(nova) {
+  const P = estado.port;
+  const igual = P.selecao && nova && P.selecao.tipo === nova.tipo && P.selecao.caminho === nova.caminho && P.selecao.col === nova.col;
+  P.selecao = igual ? null : nova;
+  desenharMatrizPort();
+  atualizarKpisPort();
+}
+$('tabela-port').addEventListener('click', (e) => {
+  const P = estado.port;
+  const botao = e.target.closest('.btn-exp');
+  if (botao) {
+    const { caminho } = P.linhas[Number(botao.dataset.i)];
+    if (P.expandidos.has(caminho)) P.expandidos.delete(caminho); else P.expandidos.add(caminho);
+    desenharMatrizPort();
+    return;
+  }
+  const ord = e.target.closest('[data-ordem]');
+  if (ord) {
+    const col = ord.dataset.ordem;
+    P.ordem = P.ordem.col === col ? { col, desc: !P.ordem.desc } : { col, desc: col !== '__nome' };
+    desenharMatrizPort();
+    return;
+  }
+  const th = e.target.closest('th.port-col');
+  if (th) {
+    const col = P.colunas[Number(th.dataset.j)];
+    selecionarPort({ tipo: 'coluna', caminho: null, col: col.chave, cond: condColunaPort(col), rotulo: col.nome });
+    return;
+  }
+  const nome = e.target.closest('td.port-nome');
+  if (nome) {
+    const no = P.linhas[Number(nome.dataset.i)];
+    selecionarPort({ tipo: 'linha', caminho: no.caminho, col: null, cond: condicaoLinha(no, P.dados.dims), rotulo: no.nome });
+    return;
+  }
+  const td = e.target.closest('td.port-cel');
+  if (td && !td.classList.contains('port-vazia')) {
+    const no = P.linhas[Number(td.dataset.i)];
+    const col = P.colunas[Number(td.dataset.j)];
+    selecionarPort({
+      tipo: 'celula', caminho: no.caminho, col: col.chave, rotulo: `${no.nome} × ${col.nome}`,
+      cond: `(${condicaoLinha(no, P.dados.dims)} AND ${condColunaPort(col)})`,
+    });
+  }
+});
+
+// ----- Leitura: texto livre guardado no navegador por combinação -----
+function chaveLeitura() {
+  const P = estado.port;
+  return CHAVE_LEITURA + [P.dimsLinhas.join('>'), $('port-colunas').value, medidaPort(), $('port-periodo').value].join('|');
+}
+function carregarLeitura() {
+  let texto = '';
+  try { texto = localStorage.getItem(chaveLeitura()) || ''; } catch { /* sem armazenamento */ }
+  $('port-leitura').value = texto;
+}
+$('port-leitura').addEventListener('input', () => {
+  try {
+    const v = $('port-leitura').value;
+    if (v) localStorage.setItem(chaveLeitura(), v); else localStorage.removeItem(chaveLeitura());
+  } catch { /* sem armazenamento */ }
+});
+
+// ----- Copiar como imagem (matriz + leitura) -----
+let promessaHtml2canvas = null;
+function carregarHtml2canvas() {
+  if (window.html2canvas) return Promise.resolve(window.html2canvas);
+  promessaHtml2canvas = promessaHtml2canvas || new Promise((ok, erro) => {
+    const sc = document.createElement('script');
+    sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+    sc.onload = () => ok(window.html2canvas);
+    sc.onerror = () => { promessaHtml2canvas = null; erro(new Error('não foi possível carregar o gerador de imagem')); };
+    document.head.appendChild(sc);
+  });
+  return promessaHtml2canvas;
+}
+async function copiarImagemPort() {
+  const botao = $('btn-copiar-port');
+  const original = botao.textContent;
+  botao.disabled = true;
+  botao.textContent = 'Gerando imagem…';
+  try {
+    const h2c = await carregarHtml2canvas();
+    const alvo = $('port-captura');
+    const canvas = await h2c(alvo, {
+      backgroundColor: '#FFFFFF', scale: 2, logging: false,
+      // na cópia: matriz inteira (sem rolagem) e a Leitura como texto
+      onclone: (doc) => {
+        const c = doc.getElementById('port-captura');
+        c.classList.add('capturando');
+        const rol = doc.getElementById('port-rolagem');
+        rol.style.overflow = 'visible';
+        rol.style.maxHeight = 'none';
+        c.style.width = Math.max(alvo.clientWidth, $('tabela-port').scrollWidth + 40) + 'px';
+        const ta = doc.getElementById('port-leitura');
+        const div = doc.createElement('div');
+        div.className = 'port-leitura-texto';
+        div.textContent = $('port-leitura').value || ' ';
+        ta.replaceWith(div);
+      },
+    });
+    const blob = await new Promise((ok) => canvas.toBlob(ok, 'image/png'));
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      botao.textContent = '✓ Copiada! Cole no PowerPoint';
+    } catch {
+      // navegador sem permissão para copiar imagem: baixa o PNG
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'portfolio.png';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      botao.textContent = '⬇ PNG baixado';
+    }
+  } catch (e) {
+    console.error(e);
+    botao.textContent = 'Não foi possível gerar a imagem';
+  }
+  setTimeout(() => { botao.textContent = original; botao.disabled = false; }, 2500);
+}
+
+// ----- Exibição e controles -----
+function lerExibicaoPort() {
+  const P = estado.port;
+  const n = parseInt($('port-topn').value, 10);
+  const auto80 = $('port-80').checked;
+  P.exib = { topN: Number.isFinite(n) && n > 0 ? n : null, outros: $('port-outros').checked, auto80 };
+  $('port-topn').disabled = auto80;
+  $('port-outros').disabled = auto80;
+  const nc = parseInt($('port-topn-col').value, 10);
+  P.exibCol = { topN: Number.isFinite(nc) && nc > 0 ? nc : null, outros: $('port-outros-col').checked };
+  // linhas/colunas "Outros" mudam de conteúdo: a seleção deixa de valer
+  if (P.selecao) { P.selecao = null; atualizarKpisPort(); }
+  desenharMatrizPort();
+}
+['port-topn', 'port-topn-col'].forEach((id) => $(id).addEventListener('input', lerExibicaoPort));
+['port-outros', 'port-80', 'port-outros-col'].forEach((id) => $(id).addEventListener('change', lerExibicaoPort));
+['port-colunas', 'port-periodo'].forEach((id) => $(id).addEventListener('change', atualizarPortfolio));
+['port-mostrar', 'port-unidade', 'port-intensidade'].forEach((id) => $(id).addEventListener('change', desenharMatrizPort));
+document.querySelectorAll('#port-medida button').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('#port-medida button').forEach((x) => x.classList.toggle('ativo', x === b));
+  carregarLeitura();
+  desenharMatrizPort();
+}));
+$('btn-expandir-port').addEventListener('click', () => {
+  const P = estado.port;
+  const abrir = (no) => no.filhos.forEach((f) => {
+    if (f.nivel < P.dados.dims.length - 1) { P.expandidos.add(f.caminho); abrir(f); }
+  });
+  if (P.raiz) abrir(P.raiz);
+  desenharMatrizPort();
+});
+$('btn-recolher-port').addEventListener('click', () => { estado.port.expandidos = new Set(); desenharMatrizPort(); });
+$('btn-limpar-selecao-port').addEventListener('click', () => selecionarPort(null));
+$('btn-copiar-port').addEventListener('click', copiarImagemPort);
 
 // =====================================================================
 // Lançamentos Mercado: só os produtos lançados no período escolhido,
@@ -4190,6 +4695,7 @@ const PAGINAS = [
   ['filtros', 'Filtros'],
   ['analise', 'Gráfico e Tabela'],
   ['pareto', 'Pareto'],
+  ['port', 'Portfólio'],
   ['lanc', 'Lançamentos Mercado'],
   ['preco', 'Preço'],
   ['preco2', 'Preço 2'],

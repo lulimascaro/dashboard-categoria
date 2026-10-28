@@ -28,6 +28,14 @@ Medida (RCD, UND, RCON ou RPF) no Período escolhido, com a linha de % acumulado
 A (até 80%), B (80–95%) e C (acima de 95%). A tabela tem as colunas da página Gráfico e Tabela mais
 Part. %, % Acumulado e Classe. Clicar numa linha ou barra destaca o item no gráfico e filtra os cards.
 
+## Portfólio
+
+A página **Portfólio** mostra uma matriz Linhas × Colunas em mapa de calor (RCD, UND ou Preço =
+RCD ÷ UND), com "Mostrar como" (valores ou %), Top N de linhas e de colunas e clique filtrando os cards.
+A caixa **Leitura** guarda o texto só neste navegador, para cada combinação de Linhas, Colunas, Medida e
+Período. "Copiar como imagem" copia a matriz e a leitura para colar no PowerPoint (ou baixa um PNG);
+a imagem é gerada no próprio navegador (biblioteca html2canvas, carregada da CDN).
+
 ## Lançamentos Mercado
 
 A página **Lançamentos Mercado** mostra só os produtos lançados no período escolhido em
