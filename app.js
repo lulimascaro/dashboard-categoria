@@ -1712,40 +1712,58 @@ function desenharPreco() {
   const difPF = (a) => (valido(a.pfU) && valido(a.rcdU) && a.pfU - a.rcdU > 0 ? a.pfU - a.rcdU : null);
   const NOMES = ['RCD (cor da corporação)', 'PF - RCD (tom claro)', 'RC (preço ao consumidor)'];
 
-  // faixa de volume no topo (≈ 20% da altura): uma bolha por coluna com o total do período
+  // volume: linha no eixo secundário com o total do período (métrica do "Top N por")
   const comVolume = $('preco-volume').checked;
   const metrica = $('preco-topn-por').value; // 'rcd' ou 'und'
   const nomeVol = metrica === 'rcd' ? 'RCD total' : 'UND total';
-  const ALTURA_BARRAS = 360;
-  const faixa = comVolume ? 92 : 0;
-  const TOPO = comVolume ? 34 : 60; // abaixo da legenda
-  el.style.height = TOPO + faixa + ALTURA_BARRAS + 'px';
+  el.style.height = '';
   const somaR = itens.reduce((s2, a) => s2 + (a.rcd || 0), 0);
   const somaU = itens.reduce((s2, a) => s2 + (a.und || 0), 0);
   const volumes = itens.map((a) => Math.max(0, a[metrica] || 0));
-  const vMin = Math.min(...volumes), vMax = Math.max(...volumes);
-  // diâmetro: o maior é no máximo 1,6× o menor; cabe na faixa e na largura da coluna
-  const dMin = Math.max(30, Math.min(46, largura * 0.62, (faixa - 12) / 1.6));
-  const diametro = (v) => dMin * (1 + 0.6 * (vMax > vMin ? (v - vMin) / (vMax - vMin) : 1));
   const textoVol = (v) => {
     if (metrica === 'rcd') return 'R$ ' + abreviar(v);
     if (v >= 1e6) return fmt1.format(v / 1e6) + ' mi';
     if (v >= 1e3) return fmt0.format(v / 1e3) + ' mil';
     return fmt0.format(v);
   };
+  const COR_VOL = 'rgba(31,42,68,0.7)';
+  // faixas verticais (px) já ocupadas em cada coluna pelos rótulos de RC, PF e RCD:
+  // preenchidas pela série do RC e lidas pela série das etiquetas do volume (desenhada depois)
+  const ocupado = [];
   const seriesVolume = comVolume ? [
-    { // linha fina pontilhada ligando as bolhas
-      type: 'line', xAxisIndex: 1, yAxisIndex: 1, silent: true, symbol: 'none', z: 1, tooltip: { show: false },
-      lineStyle: { color: '#AAB0BC', width: 1, type: 'dotted' }, data: itens.map(() => 0.5),
-    },
     {
-      name: nomeVol, type: 'scatter', xAxisIndex: 1, yAxisIndex: 1, z: 3,
-      itemStyle: { color: '#E3E7EF', borderColor: '#6B76A6', borderWidth: 1 },
+      name: nomeVol, type: 'line', yAxisIndex: 1, z: 4, symbol: 'circle', symbolSize: 5,
+      lineStyle: { width: 1.5, color: COR_VOL }, itemStyle: { color: COR_VOL },
       data: itens.map((a, i) => ({
-        value: [i, 0.5], symbolSize: diametro(volumes[i]),
-        itemStyle: a.ehIndex ? { borderColor: '#F2C94C', borderWidth: 2.5 } : undefined,
+        value: volumes[i],
+        ...(a.ehIndex ? { symbolSize: 8, itemStyle: { color: '#F2C94C', borderColor: '#F2C94C' } } : {}),
       })),
-      label: { show: true, position: 'inside', color: '#1F2A44', fontSize: 9.5, fontWeight: 'bold', formatter: (p) => textoVol(volumes[p.dataIndex]) },
+    },
+    { // etiquetas do volume: acima do ponto; se colidirem com outro rótulo, abaixo; senão, acima de tudo
+      type: 'custom', yAxisIndex: 1, z: 5, silent: true, tooltip: { show: false },
+      data: itens.map((_, i) => [i, volumes[i]]),
+      renderItem: (params, api) => {
+        const i = params.dataIndex;
+        const [x, y] = api.coord([i, volumes[i]]);
+        const texto = textoVol(volumes[i]);
+        const fs = 9;
+        const h = fs + 6;
+        const w = texto.length * fs * 0.62 + 10;
+        const faixas = ocupado[i] || [];
+        const colide = (t) => faixas.some(([a1, a2]) => t < a2 + 3 && t + h > a1 - 3); // 3 px de folga
+        let topo = y - 6 - h;
+        if (colide(topo)) {
+          topo = y + 6;
+          if (colide(topo)) topo = Math.min(y - 6 - h, ...faixas.map(([a1]) => a1)) - h - 3;
+        }
+        topo = Math.max(params.coordSys.y - 4, topo);
+        return { type: 'group', children: [
+          { type: 'rect', shape: { x: x - w / 2, y: topo, width: w, height: h, r: 3 },
+            style: { fill: 'rgba(255,255,255,0.75)', stroke: itens[i].ehIndex ? '#F2C94C' : '#C9CED8', lineWidth: itens[i].ehIndex ? 1.5 : 1 } },
+          { type: 'text', x, y: topo + h / 2,
+            style: { text: texto, fill: '#1F2A44', font: `bold ${fs}px sans-serif`, textAlign: 'center', textVerticalAlign: 'middle' } },
+        ] };
+      },
     },
   ] : [];
 
@@ -1753,46 +1771,38 @@ function desenharPreco() {
     animation: false,
     legend: {
       left: 10, top: 6, itemWidth: 14, itemHeight: 10, textStyle: { fontSize: 11 },
-      data: [...NOMES, ...(comVolume ? [{ name: nomeVol, icon: 'circle', itemStyle: { color: '#FFFFFF', borderColor: '#6B76A6', borderWidth: 1.5 } }] : [])],
+      data: [...NOMES, ...(comVolume ? [nomeVol] : [])], // a linha aparece como —●—
     },
     tooltip: {
       trigger: 'axis', axisPointer: { type: 'shadow' },
       formatter: (ps) => {
         const a = itens[ps[0].dataIndex];
-        if (ps[0].axisIndex === 1 || ps[0].seriesName === nomeVol) {
-          // bolha: totais e participação no total das colunas exibidas
-          return `<b>${escaparHtml(a.apres)}</b><br>
-            RCD total: <b>${reais(a.rcd)}</b> (${percentual(divisao(a.rcd, somaR))} das colunas exibidas)<br>
-            UND total: <b>${inteiro(a.und)}</b> (${percentual(divisao(a.und, somaU))} das colunas exibidas)`;
-        }
         const d = valido(a.pfU) && valido(a.rcdU) ? a.pfU - a.rcdU : null;
+        // volume: totais e participação no total das colunas exibidas
+        const volume = comVolume ? `<hr style="margin:4px 0;border:none;border-top:1px solid #ddd">
+          RCD total: <b>${reais(a.rcd)}</b> (${percentual(divisao(a.rcd, somaR))} das colunas exibidas)<br>
+          UND total: <b>${inteiro(a.und)}</b> (${percentual(divisao(a.und, somaU))} das colunas exibidas)` : '';
         return `<b>${escaparHtml(a.apres)}</b><br>${escaparHtml(a.corp)}<br>
           RCD/UND: <b>${reais(a.rcdU)}</b><br>
           PF/UND: <b>${reais(a.pfU)}</b><br>
           PF - RCD: <b>${reais(d)}</b> (${percentual(divisao(d, a.pfU))} do PF)<br>
-          <span style="color:${COR_RC}">RC/UND: <b>${reais(a.rcU)}</b></span>`;
+          <span style="color:${COR_RC}">RC/UND: <b>${reais(a.rcU)}</b></span>${volume}`;
       },
     },
-    // grade 0 = barras (embaixo); grade 1 = faixa das bolhas (em cima), mesmas colunas
-    grid: [
-      { left: LARGURA_ROTULO_PRECO, right: 0, top: TOPO + faixa, bottom: 6 },
-      { left: LARGURA_ROTULO_PRECO, right: 0, top: TOPO, height: Math.max(1, faixa - 8) },
-    ],
-    xAxis: [
-      { type: 'category', data: itens.map((a) => a.apres), axisLabel: { show: false }, axisTick: { show: false } },
-      { type: 'category', gridIndex: 1, data: itens.map((a) => a.apres), show: false },
-    ],
+    // right: 0 mantém as colunas alinhadas com a tabela; o eixo do volume fica por dentro, à direita
+    grid: { left: LARGURA_ROTULO_PRECO, right: 0, top: 60, bottom: 6 },
+    xAxis: { type: 'category', data: itens.map((a) => a.apres), axisLabel: { show: false }, axisTick: { show: false } },
     yAxis: [
       { type: 'value', axisLabel: { formatter: (v) => 'R$ ' + fmt0.format(v) }, max: (v) => v.max * 1.25 },
-      { type: 'value', gridIndex: 1, min: 0, max: 1, show: false },
+      {
+        type: 'value', position: 'right', show: comVolume, min: 0, max: (v) => v.max * 1.1,
+        splitLine: { show: false }, axisLine: { show: false }, axisTick: { show: false },
+        axisLabel: { inside: true, showMaxLabel: false, fontSize: 9, color: '#B5BAC4', formatter: (v) => (metrica === 'rcd' ? abreviar(v) : textoVol(v)) },
+        name: `${nomeVol} (${periodo.curto})`, nameLocation: 'end', nameGap: 10,
+        nameTextStyle: { fontSize: 9, color: '#9AA0AA', align: 'right' },
+      },
     ],
-    // rótulo da faixa, à esquerda
-    graphic: comVolume ? [{
-      type: 'text', left: 12, top: TOPO + faixa / 2 - 14,
-      style: { text: `${nomeVol}\n(${periodo.curto})`, fill: '#555', font: '11px sans-serif', lineHeight: 14 },
-    }] : [],
     series: [
-      ...seriesVolume,
       { // borda tracejada nas colunas das ELs
         type: 'custom', silent: true, z: 1, tooltip: { show: false },
         data: itens.map((a, i) => (a.el ? [i, 0] : null)).filter(Boolean),
@@ -1863,9 +1873,15 @@ function desenharPreco() {
             filhos.push({ type: 'text', x, y: basePF,
               style: { text: rotulo(a.pfU), fill: '#3A3A3A', font: `${tamanho}px sans-serif`, textAlign: 'center', textVerticalAlign: 'bottom' } });
           }
+          // o que já ocupa esta coluna (para as etiquetas do volume desviarem)
+          const faixasCol = [[yRcd + 2, yRcd + 6 + H]]; // valor do RCD dentro da barra
+          if (temPF) faixasCol.push([basePF - H, basePF]);
+          if (temRC) faixasCol.push([baseRC - H - 1, baseRC], [yDe(a.rcU) - 2, yDe(a.rcU) + 2]);
+          ocupado[params.dataIndex] = faixasCol;
           return { type: 'group', children: filhos };
         },
       },
+      ...seriesVolume,
     ],
   }, true);
   g.resize();
