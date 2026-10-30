@@ -22,14 +22,14 @@ const DIMENSOES = [
   { key: 'apres', rotulo: 'Apresentação', coluna: 'Apresentacao Desc Longa', secao: 'PRODUTO' },
   { key: 'tipoforma', rotulo: 'Tipo de Formato', coluna: 'Tipo_forma_aplicacao', secao: 'PRODUTO' },
   { key: 'forma', rotulo: 'Formato Aplicação', coluna: 'Forma_aplicacao', secao: 'PRODUTO' },
-  { key: 'padrao', rotulo: 'Padrão SKU', coluna: 'PADRÃO SKU', secao: 'PRODUTO' },
   { key: 'conc', rotulo: 'Concentração', coluna: 'Concentracao', secao: 'PRODUTO' },
+  { key: 'qtd', rotulo: 'Quantidade', coluna: 'Quantidade', secao: 'PRODUTO' },
+  { key: 'padrao', rotulo: 'Padrão SKU', coluna: 'PADRÃO SKU', secao: 'PRODUTO' },
   { key: 'cat1', rotulo: 'Categoria 01', coluna: 'CLASSIF. GERAL N1', secao: 'PRODUTO' },
   { key: 'cat2', rotulo: 'Categoria 02', coluna: 'CLASSIF. GERAL N2', secao: 'PRODUTO' },
   { key: 'cat3', rotulo: 'Categoria 03', coluna: 'CLASSIF. GERAL N3', secao: 'PRODUTO' },
   { key: 'cat4', rotulo: 'Categoria 04', coluna: 'CLASSIF. GERAL N4', secao: 'PRODUTO' },
   { key: 'cat5', rotulo: 'Categoria 05', coluna: 'CLASSIF. GERAL N5', secao: 'PRODUTO' },
-  { key: 'qtd', rotulo: 'Quantidade', coluna: 'Quantidade', secao: 'PRODUTO' },
 ];
 const COL_MEDIDA = 'Medida';
 const COL_SIGLA = 'Sigla Laboratorio';
@@ -428,7 +428,7 @@ function prepararInterface() {
   // seletores da página 2
   const tem = (k) => estado.dims.some((d) => d.key === k);
   estado.dimsGrafico = tem('forma') ? ['forma'] : estado.dims.slice(0, 1).map((d) => d.key);
-  estado.dimsTabela = tem('produto') ? ['__prodcorp'] : estado.dims.slice(0, 1).map((d) => d.key);
+  estado.dimsTabela = tem('produto') ? ['produto'] : estado.dims.slice(0, 1).map((d) => d.key);
   estado.expandidos = new Set();
   estado.ordem = { col: 'r0', desc: true };
   renderizarSeletores();
@@ -600,21 +600,16 @@ function zerarFiltros() {
 // Página 2: seletores "Gráfico" e "Tabela" (caixa suspensa estilo Power BI)
 // A ordem em que os itens são marcados define a hierarquia.
 // ---------------------------------------------------------------------
-const PRODUTO_CORP = '__prodcorp';
-
 function rotuloDim(key) {
-  if (key === PRODUTO_CORP) return 'Produto Corp';
   const d = estado.dims.find((x) => x.key === key);
   return d ? d.rotulo : key;
 }
-function exprDim(key) {
-  return key === PRODUTO_CORP ? `(d_produto || ' (' || sigla || ')')` : `d_${key}`;
-}
+const exprDim = (key) => `d_${key}`;
 
 function renderizarSeletores() {
   const base = estado.dims.map((d) => d.key);
   montarSuspenso('dd-grafico', estado.dimsGrafico, base, atualizarGraficos);
-  montarSuspenso('dd-tabela', estado.dimsTabela, [...base, PRODUTO_CORP], () => {
+  montarSuspenso('dd-tabela', estado.dimsTabela, base, () => {
     estado.expandidos = new Set();
     const tinhaSelecao = estado.selecao.size > 0;
     estado.selecao.clear();
@@ -1699,7 +1694,7 @@ async function atualizarPreco() {
   desenharPreco();
 }
 
-function nomeCurto(a) { return `${a.produto} (${a.sigla})`; }
+const nomeCurto = (a) => a.produto; // a coluna Produto já vem com a sigla do laboratório
 
 function desenharPreco() {
   if (!ultimoPreco) return;
@@ -2006,7 +2001,7 @@ function coresPorApresentacao(todas) {
 }
 const ordemApresentacao = (a, b) => String(a).localeCompare(String(b), 'pt-BR', { numeric: true });
 
-const exprProdutoCorp = `(d_produto || ' (' || sigla || ')')`;
+const exprProdutoCorp = 'd_produto'; // Produto exatamente como vem na base
 
 async function atualizarPreco2() {
   estado.preco2Pendente = false;
@@ -2650,7 +2645,7 @@ async function carregarCandidatos() {
   estado.ip.candidatos = linhas.map((c) => {
     const conc = lerConcentracao(c.conc);
     return {
-      apres: c.apres, bProd: bigramas(c.produto), bMol: bigramas(c.molecula),
+      apres: c.apres, bProd: bigramas(String(c.produto || '').replace(/\s*\([^()]*\)\s*$/, '')), bMol: bigramas(c.molecula),
       conc: conc ? conc.valor : null, qtd: valido(c.qtdnum) ? c.qtdnum : null,
       fab: new Set(textoLimpo(`${c.lab} ${c.corp}`).split(/[^A-Z0-9]+/).filter((w) => w.length >= 3 && !PALAVRAS_IGNORADAS.has(w))),
     };
@@ -3112,14 +3107,14 @@ const classePareto = (antes) => (antes < 0.8 ? 'A' : antes < 0.95 ? 'B' : 'C');
 function prepararPareto() {
   const P = estado.par;
   const tem = (k) => estado.dims.some((d) => d.key === k);
-  const padrao = tem('produto') ? [PRODUTO_CORP] : estado.dims.slice(0, 1).map((d) => d.key);
+  const padrao = tem('produto') ? ['produto'] : estado.dims.slice(0, 1).map((d) => d.key);
   P.dimsGrafico = [...padrao];
   P.dimsTabela = [...padrao];
   P.expandidos = new Set();
   P.selecao = new Map();
   const base = estado.dims.map((d) => d.key);
-  montarSuspenso('dd-grafico-par', P.dimsGrafico, [...base, PRODUTO_CORP], () => { limparSelecaoPareto(false); atualizarGraficoPareto(); });
-  montarSuspenso('dd-tabela-par', P.dimsTabela, [...base, PRODUTO_CORP], () => {
+  montarSuspenso('dd-grafico-par', P.dimsGrafico, base, () => { limparSelecaoPareto(false); atualizarGraficoPareto(); });
+  montarSuspenso('dd-tabela-par', P.dimsTabela, base, () => {
     P.expandidos = new Set();
     limparSelecaoPareto(false);
     atualizarTabelaPareto();
@@ -3620,12 +3615,12 @@ function prepararPortfolio() {
   P.selecao = null;
   P.ordem = { col: '__total', desc: true };
   const base = estado.dims.map((d) => d.key);
-  montarSuspenso('dd-linhas-port', P.dimsLinhas, [...base, PRODUTO_CORP], () => {
+  montarSuspenso('dd-linhas-port', P.dimsLinhas, base, () => {
     P.expandidos = new Set();
     atualizarPortfolio();
   });
   const sel = $('port-colunas');
-  sel.innerHTML = [...base, PRODUTO_CORP].map((k) => `<option value="${k}">${escaparHtml(rotuloDim(k))}</option>`).join('');
+  sel.innerHTML = base.map((k) => `<option value="${k}">${escaparHtml(rotuloDim(k))}</option>`).join('');
   sel.value = tem('forma') ? 'forma' : base[Math.min(1, base.length - 1)];
 }
 
@@ -4070,7 +4065,7 @@ function renderizarSeletoresLanc() {
   const L = estado.lanc;
   const base = estado.dims.map((d) => d.key);
   montarSuspenso('dd-grafico-lanc', L.dimsGrafico, [LANC, ...base], desenharGraficosLanc, rotuloDimLanc);
-  montarSuspenso('dd-tabela-lanc', L.dimsTabela, [LANC, ...base, PRODUTO_CORP], () => {
+  montarSuspenso('dd-tabela-lanc', L.dimsTabela, [LANC, ...base], () => {
     L.expandidos = new Set();
     const tinha = L.selecao.size > 0;
     L.selecao.clear();
@@ -4103,9 +4098,8 @@ async function atualizarLanc() {
   const lancSku = $('lanc-data').value === 'venda'
     ? `COALESCE(${estado.meses.map((_, i) => `CASE WHEN und_m${i} > 0 THEN ${i || -1} END`).join(', ')})`
     : `lanc_cad - ${idx0}`;
-  const unidade = $('lanc-nivel').value === 'marca' ? `(d_produto || ' (' || sigla || ')')` : 'd_apres';
+  const unidade = $('lanc-nivel').value === 'marca' ? 'd_produto' : 'd_apres';
   const dims = estado.dims.map((d) => `d_${d.key} AS "k_${d.key}"`);
-  dims.push(`(d_produto || ' (' || sigla || ')') AS "k_${PRODUTO_CORP}"`);
   const valores = [];
   const mercado = [];
   for (let t = 0; t < NT; t++) {
@@ -4122,7 +4116,7 @@ async function atualizarLanc() {
       FROM u WHERE l_lanc BETWEEN ${ini} AND ${fim}`),
     consultar(`SELECT SUM(rcd_MAT0) AS rmat, ${mercado.join(', ')} FROM fato ${where}`),
   ]);
-  const chaves = [...estado.dims.map((d) => d.key), PRODUTO_CORP];
+  const chaves = estado.dims.map((d) => d.key);
   const itens = linhas.map((l) => {
     const it = { unidade: l.unidade, L: l.l_lanc, el: !!l.is_el, mat0: l.mat0, d: {}, r: [], u: [], p: [], c: [] };
     for (const k of chaves) it.d[k] = l['k_' + k];
@@ -5172,9 +5166,14 @@ async function carregarLinhasCategorizacao() {
   if (!estado.conn) return;
   const linhas = await consultar(`SELECT f.sku, any_value(d_apres) apres, any_value(d_produto) produto,
       any_value(d_corp) corp, any_value(d_molecula) mol, any_value(d_ct4) ct4, SUM(rcd_MAT0) rcd,
+      ${estado.dims.map((d) => `any_value(f.d_${d.key}) AS "k_${d.key}"`).join(', ')},
       any_value(o.c1) b1, any_value(o.c2) b2, any_value(o.c3) b3, any_value(o.c4) b4, any_value(o.c5) b5
     FROM fato f JOIN cat_orig o ON o.rid = f.rid WHERE NOT f.is_el GROUP BY f.sku`);
-  estado.tax.linhas = linhas.map((l) => ({ ...l, rcd: l.rcd || 0, base: [l.b1, l.b2, l.b3, l.b4, l.b5].map(normCat) }));
+  estado.tax.linhas = linhas.map((l) => ({
+    ...l, rcd: l.rcd || 0, base: [l.b1, l.b2, l.b3, l.b4, l.b5].map(normCat),
+    d: Object.fromEntries(estado.dims.map((d) => [d.key, l['k_' + d.key]])),
+  }));
+  montarFiltroDimCat();
   estado.tax.linhas.sort((a, b) => b.rcd - a.rcd);
   estado.tax.porSku = new Map(estado.tax.linhas.map((l) => [l.sku, l]));
 }
@@ -5225,12 +5224,15 @@ function linhasFiltradasCat() {
   const t = estado.tax;
   const modo = $('cat-mostrar').value;
   const busca = normalizar($('cat-busca').value || '');
+  const dim = $('cat-dim').value;
+  const valorDim = $('cat-dim-valor').value;
   return (t.linhas || []).filter((l) => {
+    if (dim && valorDim && l.d[dim] !== valorDim) return false;
     const n = niveisAtuais(l);
     if (modo === 'sem' && !semCategoria(n)) return false;
     if (modo === 'alt' && !t.antes.has(l.sku)) return false;
     if (!busca) return true;
-    return normalizar([l.sku, l.apres, l.produto, l.corp, l.mol, l.ct4, ...(n || [])].join(' ')).includes(busca);
+    return normalizar([l.sku, l.apres, l.produto, l.corp, l.mol, l.ct4, l.d.conc, l.d.qtd, l.d.padrao, ...(n || [])].join(' ')).includes(busca);
   });
 }
 
@@ -5465,6 +5467,26 @@ $('btn-cat-exportar-repo').addEventListener('click', () => {
 
 $('btn-cat-desfazer').addEventListener('click', desfazerAlteracoes);
 $('cat-mostrar').addEventListener('change', desenharCategorizacao);
+// filtro por qualquer dimensão da base (Concentração, Quantidade, Padrão SKU…)
+function montarFiltroDimCat() {
+  const sel = $('cat-dim');
+  const atual = sel.value;
+  sel.innerHTML = '<option value="">(qualquer)</option>' + estado.dims.filter((d) => !NIVEIS_TAX.includes(d.key))
+    .map((d) => `<option value="${d.key}">${escaparHtml(d.rotulo)}</option>`).join('');
+  sel.value = estado.dims.some((d) => d.key === atual) ? atual : '';
+  montarValoresDimCat();
+}
+function montarValoresDimCat() {
+  const dim = $('cat-dim').value;
+  const sel = $('cat-dim-valor');
+  const atual = sel.value;
+  const valores = dim ? [...new Set((estado.tax.linhas || []).map((l) => l.d[dim]))].sort((a, b) => String(a).localeCompare(String(b), 'pt-BR', { numeric: true })) : [];
+  sel.innerHTML = '<option value="">(todos)</option>' + valores.map((v) => `<option value="${escaparHtml(v)}">${escaparHtml(v)}</option>`).join('');
+  sel.value = valores.includes(atual) ? atual : '';
+  sel.disabled = !dim;
+}
+$('cat-dim').addEventListener('change', () => { montarValoresDimCat(); desenharCategorizacao(); });
+$('cat-dim-valor').addEventListener('change', desenharCategorizacao);
 $('cat-busca').addEventListener('input', () => { clearTimeout(estado.tax.tempoBusca); estado.tax.tempoBusca = setTimeout(desenharCategorizacao, 200); });
 document.querySelectorAll('#cat-modo button').forEach((b) => b.addEventListener('click', () => { estado.tax.modo = b.dataset.modo; desenharCategorizacao(); }));
 document.addEventListener('mousedown', (e) => { if (!e.target.closest('#cat-opcoes, .cat-campo, .cat-massa-campo')) fecharOpcoesCat(); });

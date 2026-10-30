@@ -19,6 +19,8 @@ O único arquivo de dados aqui é `exemplo.csv`, com 200 linhas **fictícias**
    (separador `;`, decimal com vírgula, UTF-8 ou Latin-1).
    Ou clique em **Usar dados de exemplo**.
 3. Na aba **Filtros**, marque o que quiser analisar. Os filtros valem para todas as abas.
+   A coluna **Produto** é usada exatamente como vem na base (ex.: "LACTOSIL (APS)", já com a sigla do
+   laboratório); o dashboard não junta mais o Produto com a Sigla Laboratorio.
 4. Na aba **Gráfico e Tabela**, escolha a dimensão do gráfico, da tabela e o período (MAT ou YTD).
 
 ## Pareto

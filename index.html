@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dashboard de Mercado Farmacêutico</title>
   <!-- Ao publicar uma nova versão, atualize o número "?v=" nas duas linhas abaixo -->
-  <link rel="stylesheet" href="style.css?v=20261030-1">
+  <link rel="stylesheet" href="style.css?v=20261030-2">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
-  <script type="module" src="app.js?v=20261030-1"></script>
-  <script type="module" src="el.js?v=20261030-1"></script>
-  <script type="module" src="compilado.js?v=20261030-1"></script>
+  <script type="module" src="app.js?v=20261030-2"></script>
+  <script type="module" src="el.js?v=20261030-2"></script>
+  <script type="module" src="compilado.js?v=20261030-2"></script>
 </head>
 <body>
 
@@ -133,6 +133,7 @@
             <option value="alt">Alteradas nesta sessão</option>
           </select>
         </label>
+        <label>Filtrar por <select id="cat-dim"></select> <select id="cat-dim-valor" disabled></select></label>
         <input type="search" id="cat-busca" class="cat-busca" placeholder="Buscar código, apresentação, produto…">
         <span class="cat-contador" id="cat-contador"></span>
         <span class="texto-taxonomia cat-origem"></span>
