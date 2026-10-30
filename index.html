@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dashboard de Mercado Farmacêutico</title>
   <!-- Ao publicar uma nova versão, atualize o número "?v=" nas duas linhas abaixo -->
-  <link rel="stylesheet" href="style.css?v=20261028-4">
+  <link rel="stylesheet" href="style.css?v=20261030-1">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
-  <script type="module" src="app.js?v=20261028-4"></script>
-  <script type="module" src="el.js?v=20261028-4"></script>
-  <script type="module" src="compilado.js?v=20261028-4"></script>
+  <script type="module" src="app.js?v=20261030-1"></script>
+  <script type="module" src="el.js?v=20261030-1"></script>
+  <script type="module" src="compilado.js?v=20261030-1"></script>
 </head>
 <body>
 
@@ -33,6 +33,17 @@
         <button class="botao botao-secundario" id="btn-exemplo">Usar dados de exemplo</button>
       </div>
       <p class="dica">Formato esperado: CSV exportado do Excel, separado por ";" (UTF-8 ou Latin-1).</p>
+
+      <div class="bloco-taxonomia">
+        <div><b class="texto-taxonomia">Taxonomia: da base</b>
+          <span class="dica">Categorias (CLASSIF. GERAL N1–N5) por cd_apresentacao. Também ficam só neste navegador.</span></div>
+        <div class="botoes-taxonomia">
+          <label class="botao-pequeno">📑 Carregar taxonomia (CSV)
+            <input type="file" id="input-taxonomia" accept=".csv,text/csv" hidden>
+          </label>
+          <button type="button" class="botao-pequeno" id="btn-tax-repo">Usar taxonomia do repositório</button>
+        </div>
+      </div>
 
       <div id="carregando" hidden>
         <div class="spinner"></div>
@@ -106,6 +117,57 @@
       <div class="rodape-filtros">
         <button class="botao-zerar" id="btn-zerar">ZERAR FILTROS</button>
       </div>
+    </main>
+
+    <!-- Categorização (taxonomia) -->
+    <main id="pagina-cat" class="pagina" hidden>
+      <div class="barra-seletores">
+        <div class="ec-alterna" id="cat-modo">
+          <button type="button" data-modo="tabela" class="ativo">Tabela</button>
+          <button type="button" data-modo="arvore">Árvore</button>
+        </div>
+        <label>Mostrar
+          <select id="cat-mostrar">
+            <option value="todas">Todas</option>
+            <option value="sem">Sem categoria</option>
+            <option value="alt">Alteradas nesta sessão</option>
+          </select>
+        </label>
+        <input type="search" id="cat-busca" class="cat-busca" placeholder="Buscar código, apresentação, produto…">
+        <span class="cat-contador" id="cat-contador"></span>
+        <span class="texto-taxonomia cat-origem"></span>
+      </div>
+      <div class="cat-conteudo">
+        <div class="cat-acoes">
+          <button type="button" class="botao-pequeno" id="btn-cat-desfazer">↶ Desfazer alterações</button>
+          <button type="button" class="botao-pequeno" id="btn-cat-exportar">⬇ Exportar taxonomia (CSV)</button>
+          <button type="button" class="botao-pequeno" id="btn-cat-exportar-alt">⬇ Exportar só as alterações (CSV)</button>
+          <button type="button" class="botao-pequeno" id="btn-cat-exportar-repo" title="taxonomia.csv só com cd_apresentacao e N1–N5 (sem nomes)">⬇ Exportar para o repositório (só códigos)</button>
+          <span class="cat-dica">Cada alteração é salva neste navegador e atualiza todas as páginas na hora.</span>
+        </div>
+        <div id="cat-bloco-tabela">
+          <div class="cat-massa">
+            <b>Edição em massa:</b> <span id="cat-massa-qtd"></span>
+            <input class="cat-massa-campo" data-k="0" placeholder="N1" autocomplete="off">
+            <input class="cat-massa-campo" data-k="1" placeholder="N2" autocomplete="off">
+            <input class="cat-massa-campo" data-k="2" placeholder="N3" autocomplete="off">
+            <input class="cat-massa-campo" data-k="3" placeholder="N4" autocomplete="off">
+            <input class="cat-massa-campo" data-k="4" placeholder="N5" autocomplete="off">
+            <button type="button" class="botao-pequeno" id="btn-cat-aplicar">Aplicar às selecionadas</button>
+            <span class="cat-dica">Níveis em branco não mudam.</span>
+          </div>
+          <div class="card-tabela">
+            <div class="tabela-rolagem cat-rolagem"><table id="tabela-cat" class="tabela-cat"></table></div>
+            <div id="cat-nota" class="cat-nota"></div>
+          </div>
+        </div>
+        <div id="cat-bloco-arvore" class="card-tabela cat-arvore-card" hidden><div id="cat-arvore" class="cat-arvore"></div></div>
+        <div id="cat-bloco-semvenda" class="card-tabela cat-semvenda" hidden>
+          <h3 id="cat-semvenda-titulo">Códigos na taxonomia sem venda na base</h3>
+          <div class="tabela-rolagem"><table id="tabela-cat-semvenda" class="tabela-cat"></table></div>
+        </div>
+      </div>
+      <div id="cat-opcoes" class="cat-opcoes" hidden></div>
     </main>
 
     <!-- Página 2: Gráfico e Tabela -->

@@ -755,3 +755,49 @@ body.com-el .chave-el { background: var(--amarelo); color: #333; }
 .captura-palco .btn-exp { display: inline-block !important; visibility: hidden; }
 .captura-palco .captura-texto { white-space: pre-wrap; }
 .captura-rodape { margin-top: 10px; font-size: 11px; color: #888; }
+
+/* ---------- Taxonomia / Categorização ---------- */
+.bloco-taxonomia { margin-top: 14px; padding: 10px 12px; border: 1px dashed #c9cfe0; border-radius: 6px; display: flex; flex-direction: column; gap: 8px; text-align: left; }
+.bloco-taxonomia .dica { display: block; margin: 2px 0 0; }
+.botoes-taxonomia { display: flex; gap: 8px; flex-wrap: wrap; }
+.botoes-taxonomia label { cursor: pointer; }
+#pagina-cat { padding: 0; }
+.cat-busca { padding: 5px 8px; border-radius: 4px; border: none; min-width: 260px; }
+.cat-contador { font-weight: 700; color: var(--amarelo); }
+.cat-origem { font-size: 12px; opacity: .85; }
+.cat-conteudo { padding: 12px 16px; display: flex; flex-direction: column; gap: 10px; }
+.cat-acoes, .cat-massa { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.cat-massa { background: #fff; padding: 8px 10px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.08); font-size: 13px; }
+.cat-massa-campo { width: 130px; padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; }
+.cat-dica { font-size: 12px; color: #777; }
+.cat-rolagem { max-height: 640px; }
+.tabela-cat { border-collapse: collapse; width: 100%; font-size: 12px; }
+.tabela-cat th { position: sticky; top: 0; z-index: 1; background: var(--cinza-escuro); color: #fff; padding: 7px 6px; text-align: left; white-space: nowrap; }
+.tabela-cat td { padding: 3px 6px; border-bottom: 1px solid #eee; vertical-align: middle; }
+.tabela-cat td.cat-texto { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tabela-cat td.cat-num { text-align: right; white-space: nowrap; }
+.tabela-cat td.cat-cod { white-space: nowrap; font-family: monospace; }
+.cat-campo { width: 118px; padding: 3px 5px; border: 1px solid #d5d8e0; border-radius: 3px; font-size: 12px; background: #fff; }
+.cat-campo:focus { outline: 2px solid var(--azul); border-color: transparent; }
+.tabela-cat tr.cat-sem td { background: #FFF6CC; }
+.tabela-cat tr.cat-alterada td.cat-status { color: var(--azul); font-weight: 700; }
+.tabela-cat td.cat-status { white-space: nowrap; font-size: 11.5px; color: #8a6d00; }
+.selo-novo { display: inline-block; background: #F2C94C; color: #3a2e00; font-size: 10px; font-weight: 800; padding: 0 5px; border-radius: 3px; margin-left: 4px; font-family: sans-serif; }
+.cat-vazio { text-align: center; color: #888; padding: 16px; }
+.cat-nota { font-size: 12px; color: #777; padding: 6px 10px; }
+.cat-opcoes { position: fixed; z-index: 1000; background: #fff; border: 1px solid #c9cfe0; border-radius: 4px; box-shadow: 0 4px 14px rgba(0,0,0,.18); max-height: 260px; overflow-y: auto; font-size: 12.5px; }
+.cat-op { padding: 5px 9px; cursor: pointer; white-space: nowrap; }
+.cat-op:hover { background: #EEF1F8; }
+.cat-op-novo { color: var(--azul); font-weight: 700; border-bottom: 1px solid #eee; }
+.cat-op-vazio { padding: 6px 9px; color: #888; }
+.cat-arvore { padding: 10px 14px; font-size: 13px; }
+.cat-arvore details { margin-left: 18px; }
+.cat-arvore > details { margin-left: 0; }
+.cat-arvore summary { cursor: pointer; padding: 3px 0; }
+.arv-folha { margin-left: 34px; padding: 2px 0; }
+.arv-nome { font-weight: 700; color: var(--cinza-escuro); }
+.arv-sem { color: #8a6d00; background: #FFF6CC; padding: 0 4px; border-radius: 3px; }
+.arv-info { color: #777; font-size: 12px; margin-left: 8px; }
+.arv-total { font-weight: 700; margin-bottom: 6px; }
+.cat-semvenda h3 { margin: 0; padding: 7px 12px; background: #8a6d00; color: #fff; font-size: 14px; }
+.rodape-versao .texto-taxonomia:empty { display: none; }

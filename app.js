@@ -256,11 +256,13 @@ async function carregarArquivo(arquivo) {
     const { periodos, avisos } = montarPeriodos(colunas, meses);
 
     // Dimensões: colunas de texto. Vazios viram "(vazio)".
+    // Com taxonomia (navegador ou repositório), Categoria 01–05 existem mesmo sem as colunas na base.
+    await estado.promessaTax;
     estado.dims = [];
     const selects = [];
     for (const d of DIMENSOES) {
       const col = achar(d.coluna);
-      if (col) estado.dims.push(d);
+      if (col || (estado.tax.mapa && NIVEIS_TAX.includes(d.key))) estado.dims.push(d);
       selects.push(col ? `COALESCE(NULLIF(TRIM(${sqlColuna(col)}), ''), '(vazio)') AS d_${d.key}`
         : `'(não informado)' AS d_${d.key}`);
     }
@@ -319,6 +321,9 @@ async function carregarArquivo(arquivo) {
       FALSE AS is_el, FALSE AS el_sempre, CAST(NULL AS VARCHAR) AS el_id, ${[...colsMatp, ...colsMesP].join(', ')} FROM fato`);
     estado.colunasRc = [...Object.keys(periodos).map((p) => `rc_${p}`), ...meses.map((_, i) => `rc_m${i}`)];
     await estado.conn.query(`CREATE OR REPLACE TABLE rc_orig AS SELECT rid, ${estado.colunasRc.join(', ')} FROM fato`);
+    // CLASSIF. GERAL da base (a taxonomia substitui; daqui dá para voltar a elas)
+    await estado.conn.query(`CREATE OR REPLACE TABLE cat_orig AS SELECT rid, ${NIVEIS_TAX.map((k, i) => `d_${k} AS c${i + 1}`).join(', ')} FROM fato`);
+    await aplicarTaxonomia();
     estado.periodosRc = Object.keys(periodos);
 
     const [{ n }] = await consultar('SELECT count(*) AS n FROM fato');
@@ -336,6 +341,9 @@ async function carregarArquivo(arquivo) {
     if (estado.ip.arquivos.length) await reprocessarInfoprice();
     estado.cacheValoresEL = {};
     await reconstruirEL();
+    await carregarLinhasCategorizacao();
+    estado.tax.antes = new Map();
+    estado.tax.selecionadas = new Set();
     await atualizarTudo();
     window.dispatchEvent(new Event('base-carregada'));
     mostrarProgresso('Pronto!', 1);
@@ -756,6 +764,8 @@ async function trocarPagina(pagina) {
   marcarMenu(pagina);
   instalarCapturas(); // páginas/cards novos ganham o botão automaticamente
   $('pagina-filtros').hidden = pagina !== 'filtros';
+  $('pagina-cat').hidden = pagina !== 'cat';
+  if (pagina === 'cat') desenharCategorizacao();
   $('pagina-analise').hidden = pagina !== 'analise';
   $('pagina-lanc').hidden = pagina !== 'lanc';
   $('pagina-pareto').hidden = pagina !== 'pareto';
@@ -1446,7 +1456,7 @@ $('legenda').addEventListener('click', (e) => {
 });
 
 // versão em uso (vem do "?v=" no index.html), mostrada no rodapé
-$('versao').textContent = 'versão ' + (new URL(import.meta.url).searchParams.get('v') || 'local');
+$('versao').innerHTML = `<span class="texto-taxonomia"></span> · versão ${escaparHtml(new URL(import.meta.url).searchParams.get('v') || 'local')}`;
 
 window.addEventListener('resize', () => Object.values(estado.graficos).forEach((g) => g.resize()));
 
@@ -4960,12 +4970,515 @@ function instalarCapturas() {
 }
 
 // =====================================================================
+// Taxonomia (CLASSIF. GERAL N1–N5) separada da base de valores.
+// Prioridade: 1) salva no navegador (IndexedDB); 2) taxonomia.csv do
+// repositório; 3) colunas CLASSIF. GERAL da própria base.
+// Chave: cd_apresentacao. Nada é enviado a servidores.
+// =====================================================================
+const NIVEIS_TAX = ['cat1', 'cat2', 'cat3', 'cat4', 'cat5'];
+const COLS_TAX = ['CLASSIF. GERAL N1', 'CLASSIF. GERAL N2', 'CLASSIF. GERAL N3', 'CLASSIF. GERAL N4', 'CLASSIF. GERAL N5'];
+const SEM_CATEGORIA = 'Sem categoria';
+const MAX_LINHAS_CAT = 400; // linhas desenhadas de uma vez (o resto aparece com a busca)
+// mapa: cd_apresentacao -> { desc, n: [N1..N5] }; origem: 'navegador' | 'repositorio' | 'base'
+estado.tax = { origem: 'base', atualizado: null, mapa: null, antes: new Map(), selecionadas: new Set(), modo: 'tabela' };
+
+// ----- IndexedDB (com try/catch: navegador sem armazenamento segue funcionando) -----
+function abrirBanco() {
+  return new Promise((ok, erro) => {
+    try {
+      const req = indexedDB.open('dashboard-farma', 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('kv');
+      req.onsuccess = () => ok(req.result);
+      req.onerror = () => erro(req.error);
+    } catch (e) { erro(e); }
+  });
+}
+async function bancoLer(chave) {
+  try {
+    const db = await abrirBanco();
+    return await new Promise((ok) => {
+      const req = db.transaction('kv').objectStore('kv').get(chave);
+      req.onsuccess = () => ok(req.result);
+      req.onerror = () => ok(undefined);
+    });
+  } catch { return undefined; }
+}
+async function bancoGravar(chave, valor) {
+  try {
+    const db = await abrirBanco();
+    await new Promise((ok, erro) => {
+      const t = db.transaction('kv', 'readwrite');
+      if (valor === undefined) t.objectStore('kv').delete(chave); else t.objectStore('kv').put(valor, chave);
+      t.oncomplete = ok; t.onerror = () => erro(t.error);
+    });
+    return true;
+  } catch { return false; }
+}
+
+// ----- leitura do CSV de taxonomia (";" ou ",", UTF-8 ou Latin-1) -----
+function decodificarTexto(buffer) {
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(buffer).replace(/^﻿/, ''); }
+  catch { return new TextDecoder('windows-1252').decode(buffer); }
+}
+function lerTaxonomiaCsv(texto) {
+  const primeira = texto.split(/\r?\n/, 1)[0] || '';
+  const sep = (primeira.match(/;/g) || []).length >= (primeira.match(/,/g) || []).length ? ';' : ',';
+  const linhas = lerCsv(texto, sep);
+  if (!linhas.length) throw new Error('arquivo vazio');
+  const cab = linhas[0].map(normalizar);
+  const iCod = cab.indexOf(normalizar(COL_SKU));
+  if (iCod < 0) throw new Error(`não encontrei a coluna "${COL_SKU}"`);
+  const iDesc = cab.indexOf(normalizar('Apresentacao Desc Longa'));
+  const iN = COLS_TAX.map((c, k) => { const i = cab.indexOf(normalizar(c)); return i >= 0 ? i : cab.indexOf('n' + (k + 1)); });
+  if (iN.every((i) => i < 0)) throw new Error('não encontrei as colunas CLASSIF. GERAL N1 a N5');
+  const mapa = new Map();
+  for (const l of linhas.slice(1)) {
+    const cod = String(l[iCod] || '').trim();
+    if (!cod) continue;
+    mapa.set(cod, { desc: iDesc >= 0 ? String(l[iDesc] || '').trim() : '', n: iN.map((i) => (i >= 0 ? String(l[i] || '').trim() : '')) });
+  }
+  return mapa;
+}
+
+// ----- de onde vem a taxonomia -----
+async function carregarFonteTaxonomia() {
+  const salva = await bancoLer('taxonomia');
+  if (salva && Array.isArray(salva.linhas) && salva.linhas.length) {
+    estado.tax.mapa = new Map(salva.linhas.map(([c, desc, n]) => [c, { desc, n }]));
+    estado.tax.origem = 'navegador';
+    estado.tax.atualizado = salva.atualizado || null;
+  } else {
+    await carregarTaxonomiaRepositorio();
+  }
+  mostrarOrigemTaxonomia();
+}
+async function carregarTaxonomiaRepositorio() {
+  estado.tax.mapa = null;
+  estado.tax.origem = 'base';
+  estado.tax.atualizado = null;
+  try {
+    const resp = await fetch('taxonomia.csv', { cache: 'no-cache' });
+    if (!resp.ok) return; // não existe: segue com a base
+    const mapa = lerTaxonomiaCsv(decodificarTexto(await resp.arrayBuffer()));
+    if (mapa.size) { estado.tax.mapa = mapa; estado.tax.origem = 'repositorio'; }
+  } catch { /* sem arquivo: segue com a base */ }
+}
+function textoOrigemTaxonomia() {
+  const t = estado.tax;
+  if (t.origem === 'navegador') {
+    const d = t.atualizado ? new Date(t.atualizado) : null;
+    return `Taxonomia: navegador${d ? ` (atualizada em ${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')})` : ''}`;
+  }
+  return t.origem === 'repositorio' ? 'Taxonomia: repositório' : 'Taxonomia: da base';
+}
+function mostrarOrigemTaxonomia() {
+  const texto = textoOrigemTaxonomia();
+  document.querySelectorAll('.texto-taxonomia').forEach((e) => { e.textContent = texto; });
+}
+
+async function salvarTaxonomia() {
+  const t = estado.tax;
+  t.origem = 'navegador';
+  t.atualizado = Date.now();
+  const linhas = [...t.mapa].map(([c, v]) => [c, v.desc || '', v.n]);
+  const ok = await bancoGravar('taxonomia', { linhas, atualizado: t.atualizado });
+  if (!ok) avisoRapido('Não foi possível salvar a taxonomia neste navegador (armazenamento bloqueado).');
+  mostrarOrigemTaxonomia();
+}
+
+// ----- junção com a base: a taxonomia substitui as colunas CLASSIF. GERAL -----
+// cat_orig guarda os valores da base (para voltar a eles sem recarregar o arquivo)
+async function aplicarTaxonomia() {
+  if (!estado.conn) return;
+  const c = estado.conn;
+  const sets = NIVEIS_TAX.map((k, i) => `d_${k} = o.c${i + 1}`).join(', ');
+  await c.query(`UPDATE fato SET ${sets} FROM cat_orig o WHERE fato.rid = o.rid`);
+  const mapa = estado.tax.mapa;
+  if (!mapa) return;
+  await c.query('CREATE OR REPLACE TABLE tax (sku VARCHAR, n1 VARCHAR, n2 VARCHAR, n3 VARCHAR, n4 VARCHAR, n5 VARCHAR)');
+  const linhas = [...mapa].map(([cod, v]) => `(${[cod, ...v.n].map((x) => sqlTexto(x || '')).join(', ')})`);
+  for (let i = 0; i < linhas.length; i += 2000) {
+    await c.query(`INSERT INTO tax VALUES ${linhas.slice(i, i + 2000).join(', ')}`);
+  }
+  const vazio = (k) => `COALESCE(NULLIF(TRIM(t.n${k}), ''), '(vazio)')`;
+  await c.query(`UPDATE fato SET ${NIVEIS_TAX.map((k, i) => `d_${k} = ${vazio(i + 1)}`).join(', ')}
+    FROM tax t WHERE fato.sku = t.sku AND NOT fato.is_el`);
+  // apresentações da base que não estão na taxonomia
+  await c.query(`UPDATE fato SET ${NIVEIS_TAX.map((k) => `d_${k} = ${sqlTexto(SEM_CATEGORIA)}`).join(', ')}
+    WHERE NOT is_el AND sku NOT IN (SELECT sku FROM tax)`);
+}
+
+// a taxonomia mudou: refaz a junção e atualiza todas as páginas
+let esperaTax = null;
+async function taxonomiaMudou(imediato = false) {
+  clearTimeout(esperaTax);
+  const executar = async () => {
+    if (!estado.conn) return;
+    // base sem as colunas CLASSIF. GERAL: com taxonomia, os filtros Categoria 01–05 passam a existir
+    const faltam = estado.tax.mapa && NIVEIS_TAX.some((k) => !estado.dims.some((d) => d.key === k));
+    await aplicarTaxonomia();
+    estado.cacheValoresEL = {};
+    if (faltam) {
+      estado.dims = DIMENSOES.filter((d) => estado.dims.some((x) => x.key === d.key) || NIVEIS_TAX.includes(d.key));
+      prepararInterface();
+    }
+    await carregarLinhasCategorizacao();
+    await atualizarTudo();
+    redesenharCatQuandoLivre();
+  };
+  if (imediato) return executar();
+  esperaTax = setTimeout(executar, 400);
+}
+
+// ----- botões da tela de carregamento -----
+$('input-taxonomia').addEventListener('change', async (e) => {
+  const arquivo = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (!arquivo) return;
+  try {
+    const mapa = lerTaxonomiaCsv(decodificarTexto(await arquivo.arrayBuffer()));
+    if (!mapa.size) throw new Error('nenhuma apresentação no arquivo');
+    estado.tax.mapa = mapa;
+    estado.tax.antes = new Map();
+    await salvarTaxonomia();
+    avisoRapido(`Taxonomia carregada: ${inteiro(mapa.size)} apresentações (salva neste navegador)`);
+    await taxonomiaMudou(true);
+  } catch (erro) {
+    alert('Não foi possível ler a taxonomia: ' + (erro && erro.message ? erro.message : erro));
+  }
+});
+$('btn-tax-repo').addEventListener('click', async () => {
+  if (!confirm('Descartar a taxonomia salva neste navegador e usar a do repositório (taxonomia.csv)?\n\nDica: exporte a taxonomia antes, se quiser guardar uma cópia.')) return;
+  await bancoGravar('taxonomia', undefined);
+  await carregarTaxonomiaRepositorio();
+  estado.tax.antes = new Map();
+  mostrarOrigemTaxonomia();
+  avisoRapido(textoOrigemTaxonomia());
+  await taxonomiaMudou(true);
+});
+
+// =====================================================================
+// Página "Categorização"
+// =====================================================================
+const normCat = (v) => (v === undefined || v === null || v === '(vazio)' || v === '(não informado)' ? '' : String(v));
+// N1–N5 atuais de uma apresentação (null = não está na taxonomia)
+function niveisAtuais(l) {
+  if (estado.tax.mapa) { const v = estado.tax.mapa.get(l.sku); return v ? v.n : null; }
+  return l.base;
+}
+const semCategoria = (n) => !n || n.every((x) => !x);
+
+async function carregarLinhasCategorizacao() {
+  if (!estado.conn) return;
+  const linhas = await consultar(`SELECT f.sku, any_value(d_apres) apres, any_value(d_produto) produto,
+      any_value(d_corp) corp, any_value(d_molecula) mol, any_value(d_ct4) ct4, SUM(rcd_MAT0) rcd,
+      any_value(o.c1) b1, any_value(o.c2) b2, any_value(o.c3) b3, any_value(o.c4) b4, any_value(o.c5) b5
+    FROM fato f JOIN cat_orig o ON o.rid = f.rid WHERE NOT f.is_el GROUP BY f.sku`);
+  estado.tax.linhas = linhas.map((l) => ({ ...l, rcd: l.rcd || 0, base: [l.b1, l.b2, l.b3, l.b4, l.b5].map(normCat) }));
+  estado.tax.linhas.sort((a, b) => b.rcd - a.rcd);
+  estado.tax.porSku = new Map(estado.tax.linhas.map((l) => [l.sku, l]));
+}
+
+// valores existentes num nível, respeitando o nível acima (hierarquia)
+function valoresNivel(k, pai) {
+  const set = new Set();
+  const add = (n) => { if (n && n[k] && (k === 0 || !pai || n[k - 1] === pai)) set.add(n[k]); };
+  if (estado.tax.mapa) estado.tax.mapa.forEach((v) => add(v.n));
+  else (estado.tax.linhas || []).forEach((l) => add(l.base));
+  return [...set].sort((a, b) => a.localeCompare(b, 'pt-BR', { numeric: true }));
+}
+
+// muda N1–N5 de uma ou mais apresentações (valores null = não mexe)
+function alterarCategorias(skus, novos) {
+  const t = estado.tax;
+  if (!t.mapa) {
+    // vinha da base: a partir de agora a taxonomia é a do navegador (começa com os valores da base)
+    t.mapa = new Map();
+    for (const l of t.linhas || []) if (!semCategoria(l.base)) t.mapa.set(l.sku, { desc: l.apres, n: [...l.base] });
+  }
+  for (const sku of skus) {
+    const atual = t.mapa.get(sku);
+    if (!t.antes.has(sku)) t.antes.set(sku, atual ? [...atual.n] : null);
+    const l = t.porSku && t.porSku.get(sku);
+    const n = atual ? [...atual.n] : ['', '', '', '', ''];
+    novos.forEach((v, k) => { if (v !== null && v !== undefined) n[k] = v.trim(); });
+    t.mapa.set(sku, { desc: (atual && atual.desc) || (l && l.apres) || '', n });
+  }
+  salvarTaxonomia();
+  taxonomiaMudou();
+}
+
+function desfazerAlteracoes() {
+  const t = estado.tax;
+  if (!t.antes.size) return;
+  if (!confirm(`Desfazer as alterações de ${t.antes.size} apresentações feitas nesta sessão?`)) return;
+  t.antes.forEach((n, sku) => {
+    if (n === null) t.mapa.delete(sku);
+    else t.mapa.set(sku, { ...(t.mapa.get(sku) || { desc: '' }), n: [...n] });
+  });
+  t.antes = new Map();
+  salvarTaxonomia();
+  taxonomiaMudou(true);
+}
+
+function linhasFiltradasCat() {
+  const t = estado.tax;
+  const modo = $('cat-mostrar').value;
+  const busca = normalizar($('cat-busca').value || '');
+  return (t.linhas || []).filter((l) => {
+    const n = niveisAtuais(l);
+    if (modo === 'sem' && !semCategoria(n)) return false;
+    if (modo === 'alt' && !t.antes.has(l.sku)) return false;
+    if (!busca) return true;
+    return normalizar([l.sku, l.apres, l.produto, l.corp, l.mol, l.ct4, ...(n || [])].join(' ')).includes(busca);
+  });
+}
+
+function desenharCategorizacao() {
+  const t = estado.tax;
+  if (!t.linhas) return;
+  mostrarOrigemTaxonomia();
+  // contador: sem categoria
+  const totalRcd = t.linhas.reduce((s, l) => s + Math.max(0, l.rcd), 0);
+  const sem = t.linhas.filter((l) => semCategoria(niveisAtuais(l)));
+  const rcdSem = sem.reduce((s, l) => s + Math.max(0, l.rcd), 0);
+  $('cat-contador').textContent = `${inteiro(sem.length)} ${sem.length === 1 ? 'apresentação' : 'apresentações'} sem categoria (${percentual(divisao(rcdSem, totalRcd))} do RCD MAT)`;
+  $('btn-cat-desfazer').disabled = !t.antes.size;
+  $('cat-bloco-tabela').hidden = t.modo !== 'tabela';
+  $('cat-bloco-arvore').hidden = t.modo !== 'arvore';
+  document.querySelectorAll('#cat-modo button').forEach((b) => b.classList.toggle('ativo', b.dataset.modo === t.modo));
+  if (t.modo === 'arvore') desenharArvoreCat(); else desenharTabelaCat();
+  desenharSemVendaCat();
+}
+
+function desenharTabelaCat() {
+  const t = estado.tax;
+  const lista = linhasFiltradasCat();
+  const visiveis = lista.slice(0, MAX_LINHAS_CAT);
+  t.visiveis = visiveis;
+  for (const s of [...t.selecionadas]) if (!t.porSku.has(s)) t.selecionadas.delete(s);
+  const campo = (l, n, k) => `<input class="cat-campo" data-sku="${escaparHtml(l.sku)}" data-k="${k}" value="${escaparHtml(n ? n[k] : '')}"
+    placeholder="${k === 0 && semCategoria(n) ? SEM_CATEGORIA : ''}" autocomplete="off">`;
+  const corpo = visiveis.map((l) => {
+    const n = niveisAtuais(l);
+    const novo = estado.tax.mapa && !estado.tax.mapa.has(l.sku);
+    const semCat = semCategoria(n);
+    const alterado = t.antes.has(l.sku);
+    return `<tr class="${semCat ? 'cat-sem' : ''}${alterado ? ' cat-alterada' : ''}">
+      <td><input type="checkbox" class="cat-sel" data-sku="${escaparHtml(l.sku)}" ${t.selecionadas.has(l.sku) ? 'checked' : ''}></td>
+      <td class="cat-cod">${escaparHtml(l.sku)}${novo ? ' <span class="selo-novo">NOVO</span>' : ''}</td>
+      <td class="cat-texto" title="${escaparHtml(l.apres)}">${escaparHtml(l.apres)}</td>
+      <td class="cat-texto">${escaparHtml(l.produto)}</td><td class="cat-texto">${escaparHtml(l.corp)}</td>
+      <td class="cat-texto">${escaparHtml(l.mol)}</td><td class="cat-texto" title="${escaparHtml(l.ct4)}">${escaparHtml(l.ct4)}</td>
+      <td class="cat-num">${inteiro(l.rcd)}</td>
+      ${[0, 1, 2, 3, 4].map((k) => `<td>${campo(l, n, k)}</td>`).join('')}
+      <td class="cat-status">${alterado ? 'alterado' : semCat ? SEM_CATEGORIA : ''}</td></tr>`;
+  }).join('');
+  const todasMarcadas = visiveis.length && visiveis.every((l) => t.selecionadas.has(l.sku));
+  $('tabela-cat').innerHTML = `<thead><tr>
+      <th><input type="checkbox" id="cat-sel-todas" ${todasMarcadas ? 'checked' : ''} title="Selecionar as linhas mostradas"></th>
+      <th>cd_apresentacao</th><th>Apresentação</th><th>Produto</th><th>Corporação</th><th>Molécula</th>
+      <th>Classe Terapêutica Nível 4</th><th>RCD MAT</th><th>N1</th><th>N2</th><th>N3</th><th>N4</th><th>N5</th><th>Status</th>
+    </tr></thead><tbody>${corpo || '<tr><td colspan="14" class="cat-vazio">Nenhuma apresentação com este filtro.</td></tr>'}</tbody>`;
+  $('cat-nota').textContent = lista.length > visiveis.length
+    ? `Mostrando ${inteiro(visiveis.length)} de ${inteiro(lista.length)} apresentações (maiores RCD MAT). Use a busca para achar as demais.`
+    : `${inteiro(lista.length)} apresentações.`;
+  $('cat-massa-qtd').textContent = t.selecionadas.size ? `${inteiro(t.selecionadas.size)} selecionadas` : 'nenhuma selecionada';
+  $('btn-cat-aplicar').disabled = !t.selecionadas.size;
+}
+
+// Árvore N1 > N2 > N3 > N4 > N5 com nº de SKUs e RCD MAT de cada nó
+function desenharArvoreCat() {
+  const raiz = { filhos: new Map(), skus: 0, rcd: 0 };
+  for (const l of estado.tax.linhas) {
+    const n = niveisAtuais(l);
+    const caminho = semCategoria(n) ? [SEM_CATEGORIA] : n.map((x) => x || '(vazio)');
+    raiz.skus++; raiz.rcd += l.rcd;
+    let no = raiz;
+    for (const nome of caminho) {
+      if (!no.filhos.has(nome)) no.filhos.set(nome, { filhos: new Map(), skus: 0, rcd: 0 });
+      no = no.filhos.get(nome);
+      no.skus++; no.rcd += l.rcd;
+    }
+  }
+  const html = (no, nivel) => [...no.filhos].sort((a, b) => b[1].rcd - a[1].rcd).map(([nome, f]) => {
+    const info = `<span class="arv-nome${nome === SEM_CATEGORIA ? ' arv-sem' : ''}">${escaparHtml(nome)}</span>
+      <span class="arv-info">${inteiro(f.skus)} SKUs · RCD MAT ${abreviar(f.rcd)} · ${percentual(divisao(f.rcd, raiz.rcd))}</span>`;
+    if (!f.filhos.size) return `<div class="arv-folha arv-n${nivel}">${info}</div>`;
+    return `<details class="arv-n${nivel}" ${nivel === 1 ? 'open' : ''}><summary>N${nivel} · ${info}</summary>${html(f, nivel + 1)}</details>`;
+  }).join('');
+  $('cat-arvore').innerHTML = `<div class="arv-total">Total: ${inteiro(raiz.skus)} SKUs · RCD MAT ${abreviar(raiz.rcd)}</div>${html(raiz, 1)}`;
+}
+
+// códigos da taxonomia que não existem na base carregada
+function desenharSemVendaCat() {
+  const t = estado.tax;
+  const codigos = t.mapa ? [...t.mapa].filter(([c]) => !t.porSku.has(c)) : [];
+  $('cat-bloco-semvenda').hidden = !codigos.length;
+  if (!codigos.length) return;
+  $('cat-semvenda-titulo').textContent = `Códigos na taxonomia sem venda na base (${inteiro(codigos.length)})`;
+  $('tabela-cat-semvenda').innerHTML = `<thead><tr><th>cd_apresentacao</th><th>N1</th><th>N2</th><th>N3</th><th>N4</th><th>N5</th></tr></thead>
+    <tbody>${codigos.slice(0, 2000).map(([c, v]) => `<tr><td>${escaparHtml(c)}</td>${v.n.map((x) => `<td>${escaparHtml(x)}</td>`).join('')}</tr>`).join('')}</tbody>`;
+}
+
+// ----- caixa com busca (uma só, reaproveitada por todos os campos N1–N5) -----
+const caixaCat = { input: null, original: '' };
+function abrirOpcoesCat(input) {
+  caixaCat.input = input;
+  const k = Number(input.dataset.k);
+  let pai = null;
+  if (k > 0) {
+    // nível acima: o da mesma linha (ou o da edição em massa)
+    const vizinho = input.closest('tr, .cat-massa').querySelector(`[data-k="${k - 1}"]`);
+    pai = vizinho ? vizinho.value.trim() : null;
+  }
+  const texto = normalizar(input.value || '');
+  const todos = valoresNivel(k, pai || null);
+  const opcoes = todos.filter((v) => !texto || normalizar(v).includes(texto)).slice(0, 200);
+  const painel = $('cat-opcoes');
+  const digitado = input.value.trim();
+  const novo = digitado && !todos.some((v) => v === digitado) ? `<div class="cat-op cat-op-novo" data-v="${escaparHtml(digitado)}">+ Usar novo valor "${escaparHtml(digitado)}"</div>` : '';
+  painel.innerHTML = novo + (opcoes.map((v) => `<div class="cat-op" data-v="${escaparHtml(v)}">${escaparHtml(v)}</div>`).join('')
+    || (novo ? '' : `<div class="cat-op-vazio">${pai ? `Nenhum valor em "${escaparHtml(pai)}". Digite um novo.` : 'Digite um valor novo.'}</div>`));
+  const r = input.getBoundingClientRect();
+  Object.assign(painel.style, { left: r.left + 'px', top: r.bottom + 2 + 'px', minWidth: Math.max(r.width, 200) + 'px' });
+  painel.hidden = false;
+}
+function fecharOpcoesCat() { $('cat-opcoes').hidden = true; }
+// redesenha a tabela só quando nenhum campo dela está em edição (não tira o foco de quem digita)
+function redesenharCatQuandoLivre() {
+  if (estado.pagina !== 'cat') return;
+  const ativo = document.activeElement;
+  if (ativo && ativo.closest && ativo.closest('#tabela-cat input.cat-campo')) { estado.tax.redesenhar = true; return; }
+  estado.tax.redesenhar = false;
+  desenharCategorizacao();
+}
+function confirmarCampoCat(input) {
+  const valor = input.value.trim();
+  if (input.dataset.sku) {
+    const l = estado.tax.porSku.get(input.dataset.sku);
+    const n = niveisAtuais(l);
+    if ((n ? n[Number(input.dataset.k)] : '') === valor) return;
+    const novos = [null, null, null, null, null];
+    novos[Number(input.dataset.k)] = valor;
+    alterarCategorias([input.dataset.sku], novos);
+    // marca a linha na hora (a tabela inteira é redesenhada depois)
+    const tr = input.closest('tr');
+    tr.classList.add('cat-alterada');
+    tr.classList.toggle('cat-sem', semCategoria(niveisAtuais(l)));
+    tr.querySelector('.cat-status').textContent = 'alterado';
+  }
+}
+
+$('pagina-cat').addEventListener('focusin', (e) => {
+  const input = e.target.closest('.cat-campo, .cat-massa-campo');
+  if (!input) return;
+  caixaCat.original = input.value;
+  abrirOpcoesCat(input);
+});
+$('pagina-cat').addEventListener('input', (e) => {
+  const input = e.target.closest('.cat-campo, .cat-massa-campo');
+  if (input) abrirOpcoesCat(input);
+});
+$('pagina-cat').addEventListener('focusout', (e) => {
+  const input = e.target.closest('.cat-campo');
+  if (!input) { if (e.target.closest('.cat-massa-campo')) setTimeout(fecharOpcoesCat, 150); return; }
+  // pequena espera: o clique numa opção acontece antes de confirmar
+  setTimeout(() => {
+    if (document.activeElement === input) return;
+    fecharOpcoesCat();
+    confirmarCampoCat(input);
+    if (estado.tax.redesenhar) setTimeout(redesenharCatQuandoLivre, 600);
+  }, 150);
+});
+$('pagina-cat').addEventListener('keydown', (e) => {
+  const input = e.target.closest('.cat-campo, .cat-massa-campo');
+  if (!input) return;
+  if (e.key === 'Enter') { e.preventDefault(); fecharOpcoesCat(); input.blur(); }
+  if (e.key === 'Escape') { input.value = caixaCat.original; fecharOpcoesCat(); input.blur(); }
+});
+$('cat-opcoes').addEventListener('mousedown', (e) => {
+  const op = e.target.closest('.cat-op');
+  if (!op || !caixaCat.input) return;
+  e.preventDefault();
+  caixaCat.input.value = op.dataset.v;
+  fecharOpcoesCat();
+  caixaCat.input.blur();
+});
+
+// seleção e edição em massa
+$('tabela-cat').addEventListener('change', (e) => {
+  const t = estado.tax;
+  if (e.target.id === 'cat-sel-todas') {
+    for (const l of t.visiveis || []) { if (e.target.checked) t.selecionadas.add(l.sku); else t.selecionadas.delete(l.sku); }
+    desenharTabelaCat();
+  } else if (e.target.classList.contains('cat-sel')) {
+    if (e.target.checked) t.selecionadas.add(e.target.dataset.sku); else t.selecionadas.delete(e.target.dataset.sku);
+    $('cat-massa-qtd').textContent = t.selecionadas.size ? `${inteiro(t.selecionadas.size)} selecionadas` : 'nenhuma selecionada';
+    $('btn-cat-aplicar').disabled = !t.selecionadas.size;
+  }
+});
+$('btn-cat-aplicar').addEventListener('click', () => {
+  const t = estado.tax;
+  const campos = [...document.querySelectorAll('.cat-massa-campo')];
+  const novos = campos.map((c) => (c.value.trim() ? c.value.trim() : null)); // vazio = não mexe
+  if (!t.selecionadas.size || novos.every((v) => v === null)) { avisoRapido('Escolha as linhas e ao menos um nível para aplicar.'); return; }
+  alterarCategorias([...t.selecionadas], novos);
+  avisoRapido(`Categorias aplicadas a ${inteiro(t.selecionadas.size)} apresentações`);
+  t.selecionadas.clear();
+  campos.forEach((c) => { c.value = ''; });
+});
+
+// ----- exportações (CSV ";" em UTF-8, abre direto no Excel) -----
+function baixarCsv(nome, cab, linhas) {
+  const q = (v) => { const s = String(v ?? ''); return /[;"\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const texto = '﻿' + [cab, ...linhas].map((l) => l.map(q).join(';')).join('\r\n') + '\r\n';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([texto], { type: 'text/csv;charset=utf-8' }));
+  a.download = nome;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+}
+// taxonomia completa: todas as apresentações da base + códigos que só existem na taxonomia
+function linhasTaxonomiaCompleta() {
+  const t = estado.tax;
+  const linhas = (t.linhas || []).map((l) => [l.sku, l.apres, ...(niveisAtuais(l) || ['', '', '', '', ''])]);
+  if (t.mapa) t.mapa.forEach((v, c) => { if (!t.porSku.has(c)) linhas.push([c, v.desc || '', ...v.n]); });
+  return linhas;
+}
+$('btn-cat-exportar').addEventListener('click', () => baixarCsv('taxonomia_completa.csv', [COL_SKU, 'Apresentacao Desc Longa', ...COLS_TAX], linhasTaxonomiaCompleta()));
+$('btn-cat-exportar-alt').addEventListener('click', () => {
+  const t = estado.tax;
+  if (!t.antes.size) { avisoRapido('Nenhuma alteração nesta sessão.'); return; }
+  const linhas = [...t.antes.keys()].map((sku) => {
+    const l = t.porSku.get(sku);
+    const v = t.mapa.get(sku);
+    return [sku, (l && l.apres) || (v && v.desc) || '', ...(v ? v.n : ['', '', '', '', ''])];
+  });
+  baixarCsv('taxonomia_alteracoes.csv', [COL_SKU, 'Apresentacao Desc Longa', ...COLS_TAX], linhas);
+});
+// para o repositório: só códigos e classificações (nenhum nome de produto, corporação etc.)
+$('btn-cat-exportar-repo').addEventListener('click', () => {
+  const linhas = linhasTaxonomiaCompleta().map(([c, , ...n]) => [c, ...n]).filter((l) => l.slice(1).some(Boolean));
+  baixarCsv('taxonomia.csv', [COL_SKU, ...COLS_TAX], linhas);
+});
+
+$('btn-cat-desfazer').addEventListener('click', desfazerAlteracoes);
+$('cat-mostrar').addEventListener('change', desenharCategorizacao);
+$('cat-busca').addEventListener('input', () => { clearTimeout(estado.tax.tempoBusca); estado.tax.tempoBusca = setTimeout(desenharCategorizacao, 200); });
+document.querySelectorAll('#cat-modo button').forEach((b) => b.addEventListener('click', () => { estado.tax.modo = b.dataset.modo; desenharCategorizacao(); }));
+document.addEventListener('mousedown', (e) => { if (!e.target.closest('#cat-opcoes, .cat-campo, .cat-massa-campo')) fecharOpcoesCat(); });
+
+estado.promessaTax = carregarFonteTaxonomia();
+
+// =====================================================================
 // Menu de páginas (caixa suspensa "Página: …")
 // Filtros sempre em primeiro; páginas novas entram na lista abaixo.
 // =====================================================================
 const CHAVE_PAGINA = 'dashboard-farma:pagina';
 const PAGINAS = [
   ['filtros', 'Filtros'],
+  ['cat', 'Categorização'],
   ['analise', 'Gráfico e Tabela'],
   ['pareto', 'Pareto'],
   ['port', 'Portfólio'],

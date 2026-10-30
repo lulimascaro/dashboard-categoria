@@ -50,6 +50,19 @@ aparecem em cinza e itálico.
 
 O `exemplo.csv` tem 13 apresentações (10 marcas) com lançamentos fictícios entre out-23 e jun-26.
 
+## Taxonomia (Categoria 01–05) e página Categorização
+
+As colunas **CLASSIF. GERAL N1–N5** podem vir de um arquivo separado da base de valores (CSV com ";":
+`cd_apresentacao;Apresentacao Desc Longa;CLASSIF. GERAL N1;…;N5` — a coluna de descrição é opcional).
+A chave é `cd_apresentacao`, e a taxonomia substitui as colunas que vierem na base.
+Ordem de prioridade: 1) taxonomia salva **neste navegador** (carregada na tela inicial ou editada na
+página Categorização); 2) `taxonomia.csv` na raiz do repositório, se existir; 3) as colunas da própria base.
+
+Na página **Categorização** é possível revisar e editar N1–N5 (uma a uma ou em massa), ver a árvore da
+hierarquia e exportar a taxonomia. O botão "Exportar para o repositório (só códigos)" gera um
+`taxonomia.csv` apenas com `cd_apresentacao` e N1–N5, sem nomes de produtos ou empresas.
+**Este repositório não guarda nenhuma taxonomia real** — só o `taxonomia_exemplo.csv`, fictício.
+
 ## Correção de preço (Infoprice)
 
 Na página **Filtros**, a seção "Correção de preço (Infoprice)" aceita um ou mais CSVs do Infoprice
@@ -111,4 +124,5 @@ O número aparece no rodapé do site.
 | `exemplo_infoprice.csv` | Preços Infoprice fictícios para teste |
 | `el.js` | Aba EL (Estudo de Lançamento) |
 | `exemplo_el.html` | EL fictícia para teste |
+| `taxonomia_exemplo.csv` | Taxonomia fictícia (N1–N5) compatível com o `exemplo.csv` |
 | `compilado.js` | Página EL Compilado (OnePage de todas as ELs) |
