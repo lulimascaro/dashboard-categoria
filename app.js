@@ -15,6 +15,8 @@ const DIMENSOES = [
   { key: 'ct4', rotulo: 'Classe Terapêutica 04', coluna: 'Classe Terapeutica Nível 4 Concatenada', secao: 'MERCADO' },
   { key: 'mercado', rotulo: 'Tipo de Mercado', coluna: 'Mercado', secao: 'MERCADO' },
   { key: 'molecula', rotulo: 'Molécula', coluna: 'Molecula', secao: 'PRODUTO' },
+  { key: 'mol1', rotulo: 'Classif. Mol. 1', coluna: 'Classif. Mol. 1', secao: 'PRODUTO' },
+  { key: 'mol2', rotulo: 'Classif. Mol. 2', coluna: 'Classif. Mol. 2', secao: 'PRODUTO' },
   { key: 'corp', rotulo: 'Corporação', coluna: 'Corporacao', secao: 'PRODUTO' },
   { key: 'bu', rotulo: 'BU', coluna: 'DIVISAO', secao: 'PRODUTO' },
   { key: 'lab', rotulo: 'Laboratório', coluna: 'Laboratorio', secao: 'PRODUTO' },
@@ -262,7 +264,7 @@ async function carregarArquivo(arquivo) {
     const selects = [];
     for (const d of DIMENSOES) {
       const col = achar(d.coluna);
-      if (col || (estado.tax.mapa && NIVEIS_TAX.includes(d.key))) estado.dims.push(d);
+      if (col || dimDaTaxonomia(d.key)) estado.dims.push(d);
       selects.push(col ? `COALESCE(NULLIF(TRIM(${sqlColuna(col)}), ''), '(vazio)') AS d_${d.key}`
         : `'(não informado)' AS d_${d.key}`);
     }
@@ -322,8 +324,12 @@ async function carregarArquivo(arquivo) {
     estado.colunasRc = [...Object.keys(periodos).map((p) => `rc_${p}`), ...meses.map((_, i) => `rc_m${i}`)];
     await estado.conn.query(`CREATE OR REPLACE TABLE rc_orig AS SELECT rid, ${estado.colunasRc.join(', ')} FROM fato`);
     // CLASSIF. GERAL da base (a taxonomia substitui; daqui dá para voltar a elas)
-    await estado.conn.query(`CREATE OR REPLACE TABLE cat_orig AS SELECT rid, ${NIVEIS_TAX.map((k, i) => `d_${k} AS c${i + 1}`).join(', ')} FROM fato`);
+    estado.periodosDos = Object.keys(periodos).map((p) => `dos_${p}`);
+    await estado.conn.query(`CREATE OR REPLACE TABLE cat_orig AS SELECT rid, ${NIVEIS_TAX.map((k, i) => `d_${k} AS c${i + 1}`).join(', ')},
+      ${ATRIBS_TAX.filter((a) => a.dim).map((a) => `d_${a.key} AS o_${a.key}`).join(', ')}, qtdnum AS o_qtdnum,
+      ${estado.periodosDos.map((c) => `${c} AS o_${c}`).join(', ')} FROM fato`);
     await aplicarTaxonomia();
+    await calcularJanelaPreco();
     estado.periodosRc = Object.keys(periodos);
 
     const [{ n }] = await consultar('SELECT count(*) AS n FROM fato');
@@ -345,6 +351,7 @@ async function carregarArquivo(arquivo) {
     estado.tax.antes = new Map();
     estado.tax.selecionadas = new Set();
     await atualizarTudo();
+    atualizarValidacao();
     window.dispatchEvent(new Event('base-carregada'));
     mostrarProgresso('Pronto!', 1);
     $('tela-inicial').hidden = true;
@@ -1154,7 +1161,8 @@ function desenharGrafico(id, grupos, prefixo, per, totalGeral, tipo, opcoes = {}
 }
 
 // ----- Tabela (matriz com níveis) -----
-const CAMPOS_TABELA = ['r0', 'r1', 'r4', 'u0', 'u1', 'u4', 'd0', 'rP', 'uP'];
+// pu/pp/pr/pc = unidades, PF, RCD e RC somados na janela fixa de 3 meses (preço médio)
+const CAMPOS_TABELA = ['r0', 'r1', 'r4', 'u0', 'u1', 'u4', 'd0', 'rP', 'uP', 'pu', 'pp', 'pr', 'pc'];
 const SEP = '\u0001'; // separador interno do "caminho" de cada linha
 
 const COLUNAS_TABELA = (T, comProjecao = false) => [
@@ -1175,6 +1183,12 @@ const COLUNAS_TABELA = (T, comProjecao = false) => [
     { id: 'uP', titulo: 'UND MAT+1', tipo: 'num', cor: '#CDBDEB', proj: true },
     { id: 'evUP', titulo: 'Evol. MAT+1 UND', tipo: 'var', proj: true },
   ] : []),
+  // preço médio ponderado na janela fixa de 3 meses (Σ valor ÷ Σ unidades)
+  { id: 'pfU', titulo: 'PF/UND', tipo: 'rs', calor: true },
+  { id: 'rcdU', titulo: 'RCD/UND', tipo: 'rs', calor: true },
+  { id: 'rcU', titulo: 'RC/UND', tipo: 'rs', calor: true },
+  { id: 'dc3', titulo: 'Desc. Com.', tipo: 'pct' },
+  { id: 'mg3', titulo: 'Margem PDV', tipo: 'pct' },
 ];
 
 function novoNo(nome, nivel, caminho, valores) {
@@ -1194,7 +1208,84 @@ function completarNo(no, total) {
   no.cgU = cagr(no.u0, no.u4);
   no.evRP = evolucao(no.rP, no.r0);
   no.evUP = evolucao(no.uP, no.u0);
+  // preço médio na janela de 3 meses; sem unidades = em branco
+  no.pfU = no.pu > 0 && no.pp ? no.pp / no.pu : null;
+  no.rcdU = no.pu > 0 && no.pr ? no.pr / no.pu : null;
+  no.rcU = no.pu > 0 && no.pc ? no.pc / no.pu : null;
+  no.dc3 = valido(no.rcdU) && no.pfU ? 1 - no.rcdU / no.pfU : null;   // desconto comercial (PF vs RCD)
+  no.mg3 = valido(no.rcdU) && no.rcU ? (no.rcU - no.rcdU) / no.rcU : null; // margem PDV (RC vs RCD)
 }
+
+// ----- janela fixa do preço médio: as 3 últimas colunas mensais da base, terminando no último
+// mês com algum valor diferente de zero (a mesma para todos os produtos) -----
+async function calcularJanelaPreco() {
+  const n = estado.meses.length;
+  estado.janelaPreco = { indices: [], texto: '' };
+  if (n) {
+    const somas = estado.meses.map((_, i) => ['rcd', 'und', 'pf', 'rc'].map((m) => `ABS(COALESCE(${m}_m${i}, 0))`).join(' + '))
+      .map((e, i) => `SUM(${e}) AS s${i}`);
+    const [r] = await consultar(`SELECT ${somas.join(', ')} FROM fato WHERE NOT is_el`);
+    let fim = -1;
+    for (let i = n - 1; i >= 0; i--) if ((r['s' + i] || 0) > 0) { fim = i; break; }
+    if (fim >= 0) {
+      const ini = Math.max(0, fim - 2);
+      estado.janelaPreco = {
+        indices: Array.from({ length: fim - ini + 1 }, (_, k) => ini + k),
+        texto: ini === fim ? estado.meses[fim] : `${estado.meses[ini]} a ${estado.meses[fim]}`,
+        meses: estado.meses.slice(ini, fim + 1),
+        ultimo: estado.meses[fim],
+      };
+    }
+  }
+  document.querySelectorAll('.janela-preco').forEach((e) => {
+    e.textContent = estado.janelaPreco.texto
+      ? `Preço médio (PF/UND, RCD/UND, RC/UND, Desc. Com. e Margem PDV): ${estado.janelaPreco.texto}`
+      : 'Preço médio: a base não tem colunas mensais com valores.';
+  });
+}
+// soma de uma medida na janela de preço (por linha da base)
+function exprJanelaPreco(m) {
+  const idx = (estado.janelaPreco && estado.janelaPreco.indices) || [];
+  return idx.length ? '(' + idx.map((i) => `COALESCE(${m}_m${i}, 0)`).join(' + ') + ')' : 'NULL';
+}
+const somasJanelaPreco = () => `SUM(${exprJanelaPreco('und')}) pu, SUM(${exprJanelaPreco('pf')}) pp,
+      SUM(${exprJanelaPreco('rcd')}) pr, SUM(${exprJanelaPreco('rc')}) pc`;
+
+// formatação condicional do preço: verde-claro (mais barato) → vinho escuro (mais caro)
+const ESCALA_PRECO = [[0, [217, 242, 208]], [0.5, [246, 194, 139]], [1, [107, 15, 36]]];
+function corPreco(t) {
+  let k = 0;
+  while (k < ESCALA_PRECO.length - 2 && t > ESCALA_PRECO[k + 1][0]) k++;
+  const [t0, c0] = ESCALA_PRECO[k];
+  const [t1, c1] = ESCALA_PRECO[k + 1];
+  const f = Math.min(1, Math.max(0, (t - t0) / (t1 - t0)));
+  const c = c0.map((x, i) => Math.round(x + (c1[i] - x) * f));
+  const escuro = (0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]) / 255 < 0.55;
+  return { fundo: `rgb(${c.join(',')})`, texto: escuro ? '#FFFFFF' : '#2B2B2B' };
+}
+// mínimo e máximo de cada coluna de preço nas linhas visíveis da tabela
+function faixasCalor(visiveis, colunas) {
+  const f = {};
+  for (const c of colunas) {
+    if (!c.calor) continue;
+    const vals = visiveis.map((l) => l[c.id]).filter(valido);
+    if (vals.length) f[c.id] = { min: Math.min(...vals), max: Math.max(...vals) };
+  }
+  return f;
+}
+// célula de preço (R$) ou %; com fundo colorido nas colunas de preço (não no Total)
+function celulaPreco(l, c, faixas) {
+  const v = l[c.id];
+  const texto = c.tipo === 'rs' ? reais(v) : percentual(v);
+  const fx = faixas && faixas[c.id];
+  if (c.calor && fx && valido(v)) {
+    const { fundo, texto: cor } = corPreco(fx.max > fx.min ? (v - fx.min) / (fx.max - fx.min) : 0.5);
+    return `<td class="cel-preco" style="background:${fundo};color:${cor}">${texto}</td>`;
+  }
+  return `<td>${valido(v) ? texto : ''}</td>`;
+}
+// "(sem detalhamento)" como único filho: não há o que abrir
+const soSemDetalhamento = (no) => no.filhos && no.filhos.size === 1 && no.filhos.has(SEM_DETALHAMENTO);
 
 // A tabela usa só os filtros da página Filtros (não a própria seleção)
 let ultimaTabela = null;
@@ -1205,7 +1296,7 @@ async function atualizarTabela() {
   const linhas = await consultar(`SELECT ${grupos.length ? grupos.join(', ') + ',' : ''}
       SUM(rcd_${T}0) r0, SUM(rcd_${T}1) r1, SUM(rcd_${T}4) r4,
       SUM(und_${T}0) u0, SUM(und_${T}1) u1, SUM(und_${T}4) u4,
-      SUM(dos_${T}0) d0,
+      SUM(dos_${T}0) d0, ${somasJanelaPreco()},
       ${T === 'MAT' && elLigado() ? `SUM(${exprMATP('rcd')}) rP, SUM(${exprMATP('und')}) uP,` : ''}
       bool_or(is_el) AS el
     FROM fato ${clausulaWhere(null)} ${grupos.length ? 'GROUP BY ALL' : ''}`);
@@ -1289,7 +1380,7 @@ function desenharTabela() {
     for (const f of lista) {
       if (visiveis.length >= MAX_LINHAS_TABELA) { cortou = true; return; }
       visiveis.push(f);
-      if (!f.ehOutros && f.nivel < ultimoNivel && estado.expandidos.has(f.caminho)) percorrer(f);
+      if (!f.ehOutros && f.nivel < ultimoNivel && !soSemDetalhamento(f) && estado.expandidos.has(f.caminho)) percorrer(f);
     }
   };
   if (dims.length) percorrer(raiz);
@@ -1304,7 +1395,9 @@ function desenharTabela() {
     }
   }
 
+  const faixas = faixasCalor(visiveis, colunas);
   const celula = (l, c, comBarra) => {
+    if (c.tipo === 'rs' || ['dc3', 'mg3'].includes(c.id)) return celulaPreco(l, c, comBarra ? faixas : null);
     const v = l[c.id];
     const texto = c.tipo === 'num' ? inteiro(v) : percentual(v);
     const classe = c.tipo === 'var' ? classeSinal(v) : '';
@@ -1326,7 +1419,7 @@ function desenharTabela() {
   const haSelecao = estado.selecao.size > 0;
   estado.linhasTabela = visiveis;
   const corpo = '<tbody>' + visiveis.map((l, i) => {
-    const podeAbrir = !l.ehOutros && l.nivel < ultimoNivel;
+    const podeAbrir = !l.ehOutros && l.nivel < ultimoNivel && !soSemDetalhamento(l);
     const aberto = estado.expandidos.has(l.caminho);
     const botao = podeAbrir
       ? `<button class="btn-exp" data-i="${i}" title="${aberto ? 'Recolher' : 'Expandir'}">${aberto ? '−' : '+'}</button>`
@@ -1389,6 +1482,28 @@ function aplicarSelecao() {
   atualizarGraficos();
 }
 
+// ----- Drill-down (a "setinha"): ligado, clicar na linha desce um nível e filtra -----
+const CHAVE_DRILL = 'dashboard-farma:drill';
+try { estado.drill = localStorage.getItem(CHAVE_DRILL) === '1'; } catch { estado.drill = false; }
+function drillLinha(linha, nDims, expandidos, selecao) {
+  if (linha.ehOutros || linha.nivel >= nDims - 1 || soSemDetalhamento(linha)) return;
+  // clicar de novo na mesma linha (já selecionada sozinha) sobe de volta
+  if (selecao.has(linha.caminho) && selecao.size === 1) expandidos.delete(linha.caminho);
+  else expandidos.add(linha.caminho);
+}
+function marcarDrill() {
+  document.querySelectorAll('.btn-drill').forEach((b) => {
+    b.classList.toggle('ativo', estado.drill);
+    b.textContent = `↘ Drill-down: ${estado.drill ? 'ligado' : 'desligado'}`;
+  });
+}
+document.querySelectorAll('.btn-drill').forEach((b) => b.addEventListener('click', () => {
+  estado.drill = !estado.drill;
+  try { localStorage.setItem(CHAVE_DRILL, estado.drill ? '1' : '0'); } catch { /* sem armazenamento */ }
+  marcarDrill();
+}));
+marcarDrill();
+
 // ---------------------------------------------------------------------
 // Ligações dos botões
 // ---------------------------------------------------------------------
@@ -1443,7 +1558,11 @@ $('tabela').addEventListener('click', (e) => {
     return;
   }
   const tr = e.target.closest('tbody tr');
-  if (tr) clicarLinha(estado.linhasTabela[Number(tr.dataset.i)], e.ctrlKey || e.metaKey);
+  if (tr) {
+    const linha = estado.linhasTabela[Number(tr.dataset.i)];
+    if (estado.drill) drillLinha(linha, ultimaTabela.dims.length, estado.expandidos, estado.selecao);
+    clicarLinha(linha, e.ctrlKey || e.metaKey);
+  }
 });
 $('legenda').addEventListener('click', (e) => {
   const item = e.target.closest('.leg-item');
@@ -3364,7 +3483,7 @@ async function atualizarTabelaPareto() {
       ${somaPeriodo(med, per.atual)} v,
       ${somaPeriodo('rcd', per.atual)} r0, ${somaPeriodo('rcd', per.ant)} r1, ${somaPeriodo('rcd', per.base)} r4,
       ${somaPeriodo('und', per.atual)} u0, ${somaPeriodo('und', per.ant)} u1, ${somaPeriodo('und', per.base)} u4,
-      ${somaPeriodo('dos', per.atual)} d0, bool_or(is_el) AS el
+      ${somaPeriodo('dos', per.atual)} d0, ${somasJanelaPreco()}, bool_or(is_el) AS el
     FROM fato ${clausulaWhere(null)} ${grupos.length ? 'GROUP BY ALL' : ''}`);
   const campos = [...CAMPOS_TABELA, 'v'];
   const raiz = novoNo('Total', -1, '', []);
@@ -3444,7 +3563,7 @@ function desenharTabelaPareto() {
     for (const f of lista) {
       if (visiveis.length >= MAX_LINHAS_TABELA) { cortou = true; return; }
       visiveis.push(f);
-      if (!f.ehOutros && f.nivel < ultimoNivel && P.expandidos.has(f.caminho)) percorrer(f);
+      if (!f.ehOutros && f.nivel < ultimoNivel && !soSemDetalhamento(f) && P.expandidos.has(f.caminho)) percorrer(f);
     }
   };
   if (dims.length) percorrer(raiz);
@@ -3457,7 +3576,9 @@ function desenharTabelaPareto() {
       maximos[chave] = Math.max(maximos[chave] || 0, valido(l[c.id]) ? l[c.id] : 0);
     }
   }
+  const faixas = faixasCalor(visiveis, colunas);
   const celula = (l, c, comBarra) => {
+    if (c.tipo === 'rs' || ['dc3', 'mg3'].includes(c.id)) return celulaPreco(l, c, comBarra ? faixas : null);
     const v = l[c.id];
     if (c.tipo === 'classe') {
       return v ? `<td><span class="classe-pareto" style="background:${COR_CLASSE[v]};color:${corTexto(COR_CLASSE[v])}">${v}</span></td>` : '<td></td>';
@@ -3483,7 +3604,7 @@ function desenharTabelaPareto() {
   const selecionada = (caminho) => [...P.selecao.keys()].some((c) => caminho === c || caminho.startsWith(c + SEP));
   P.linhas = visiveis;
   const corpo = '<tbody>' + visiveis.map((l, i) => {
-    const podeAbrir = !l.ehOutros && l.nivel < ultimoNivel;
+    const podeAbrir = !l.ehOutros && l.nivel < ultimoNivel && !soSemDetalhamento(l);
     const aberto = P.expandidos.has(l.caminho);
     const botao = podeAbrir
       ? `<button class="btn-exp" data-i="${i}" title="${aberto ? 'Recolher' : 'Expandir'}">${aberto ? '−' : '+'}</button>`
@@ -3583,6 +3704,7 @@ $('tabela-par').addEventListener('click', (e) => {
   const tr = e.target.closest('tbody tr');
   if (tr) {
     const linha = P.linhas[Number(tr.dataset.i)];
+    if (estado.drill) drillLinha(linha, P.tabela.dims.length, P.expandidos, P.selecao);
     alternarSelecaoPareto(linha.caminho, condicaoLinha(linha, P.tabela.dims), e.ctrlKey || e.metaKey);
   }
 });
@@ -5014,6 +5136,21 @@ function decodificarTexto(buffer) {
   try { return new TextDecoder('utf-8', { fatal: true }).decode(buffer).replace(/^﻿/, ''); }
   catch { return new TextDecoder('windows-1252').decode(buffer); }
 }
+// Colunas além de N1–N5 que a taxonomia pode trazer (substituem as da base para os códigos dela)
+const ATRIBS_TAX = [
+  { key: 'conc', col: 'Concentracao', dim: true },
+  { key: 'qtd', col: 'Quantidade', dim: true },
+  { key: 'qtdnum', col: 'Quantidade Num', dim: false },
+  { key: 'padrao', col: 'PADRÃO SKU', dim: true },
+  { key: 'mol1', col: 'Classif. Mol. 1', dim: true, depois: true },
+  { key: 'mol2', col: 'Classif. Mol. 2', dim: true, depois: true },
+];
+const SEM_DETALHAMENTO = '(sem detalhamento)'; // "-" nos níveis N1–N5
+const SEM_INFORMACAO = '(sem informação)';     // "-" ou vazio nas demais colunas (ex.: Concentração)
+// a dimensão existe por causa da taxonomia (mesmo sem a coluna na base)
+const dimDaTaxonomia = (key) => !!estado.tax.mapa && (NIVEIS_TAX.includes(key) || (estado.tax.atribs || []).includes(key));
+
+// devolve o mapa (código -> { desc, n: [N1..N5], x: { conc, qtd, … } }) e as colunas extras presentes
 function lerTaxonomiaCsv(texto) {
   const primeira = texto.split(/\r?\n/, 1)[0] || '';
   const sep = (primeira.match(/;/g) || []).length >= (primeira.match(/,/g) || []).length ? ';' : ',';
@@ -5025,12 +5162,16 @@ function lerTaxonomiaCsv(texto) {
   const iDesc = cab.indexOf(normalizar('Apresentacao Desc Longa'));
   const iN = COLS_TAX.map((c, k) => { const i = cab.indexOf(normalizar(c)); return i >= 0 ? i : cab.indexOf('n' + (k + 1)); });
   if (iN.every((i) => i < 0)) throw new Error('não encontrei as colunas CLASSIF. GERAL N1 a N5');
+  const extras = ATRIBS_TAX.map((a) => [a.key, cab.indexOf(normalizar(a.col))]).filter(([, i]) => i >= 0);
   const mapa = new Map();
   for (const l of linhas.slice(1)) {
     const cod = String(l[iCod] || '').trim();
     if (!cod) continue;
-    mapa.set(cod, { desc: iDesc >= 0 ? String(l[iDesc] || '').trim() : '', n: iN.map((i) => (i >= 0 ? String(l[i] || '').trim() : '')) });
+    const x = {};
+    for (const [k, i] of extras) x[k] = String(l[i] || '').trim();
+    mapa.set(cod, { desc: iDesc >= 0 ? String(l[iDesc] || '').trim() : '', n: iN.map((i) => (i >= 0 ? String(l[i] || '').trim() : '')), x });
   }
+  mapa.atribs = extras.map(([k]) => k);
   return mapa;
 }
 
@@ -5038,7 +5179,8 @@ function lerTaxonomiaCsv(texto) {
 async function carregarFonteTaxonomia() {
   const salva = await bancoLer('taxonomia');
   if (salva && Array.isArray(salva.linhas) && salva.linhas.length) {
-    estado.tax.mapa = new Map(salva.linhas.map(([c, desc, n]) => [c, { desc, n }]));
+    estado.tax.mapa = new Map(salva.linhas.map(([c, desc, n, x]) => [c, { desc, n, x: x || {} }]));
+    estado.tax.atribs = salva.atribs || [];
     estado.tax.origem = 'navegador';
     estado.tax.atualizado = salva.atualizado || null;
   } else {
@@ -5048,13 +5190,14 @@ async function carregarFonteTaxonomia() {
 }
 async function carregarTaxonomiaRepositorio() {
   estado.tax.mapa = null;
+  estado.tax.atribs = [];
   estado.tax.origem = 'base';
   estado.tax.atualizado = null;
   try {
     const resp = await fetch('taxonomia.csv', { cache: 'no-cache' });
     if (!resp.ok) return; // não existe: segue com a base
     const mapa = lerTaxonomiaCsv(decodificarTexto(await resp.arrayBuffer()));
-    if (mapa.size) { estado.tax.mapa = mapa; estado.tax.origem = 'repositorio'; }
+    if (mapa.size) { estado.tax.mapa = mapa; estado.tax.atribs = mapa.atribs; estado.tax.origem = 'repositorio'; }
   } catch { /* sem arquivo: segue com a base */ }
 }
 function textoOrigemTaxonomia() {
@@ -5074,32 +5217,109 @@ async function salvarTaxonomia() {
   const t = estado.tax;
   t.origem = 'navegador';
   t.atualizado = Date.now();
-  const linhas = [...t.mapa].map(([c, v]) => [c, v.desc || '', v.n]);
-  const ok = await bancoGravar('taxonomia', { linhas, atualizado: t.atualizado });
+  const linhas = [...t.mapa].map(([c, v]) => [c, v.desc || '', v.n, v.x || {}]);
+  const ok = await bancoGravar('taxonomia', { linhas, atribs: t.atribs || [], atualizado: t.atualizado });
   if (!ok) avisoRapido('Não foi possível salvar a taxonomia neste navegador (armazenamento bloqueado).');
   mostrarOrigemTaxonomia();
 }
 
-// ----- junção com a base: a taxonomia substitui as colunas CLASSIF. GERAL -----
-// cat_orig guarda os valores da base (para voltar a eles sem recarregar o arquivo)
+// ----- junção com a base: a taxonomia substitui N1–N5 e as colunas extras que trouxer -----
+// cat_orig guarda os valores da base (para voltar a eles sem recarregar o arquivo).
+// Códigos da base fora da taxonomia: N1–N5 = "Sem categoria"; as demais colunas ficam as da base.
 async function aplicarTaxonomia() {
   if (!estado.conn) return;
   const c = estado.conn;
-  const sets = NIVEIS_TAX.map((k, i) => `d_${k} = o.c${i + 1}`).join(', ');
-  await c.query(`UPDATE fato SET ${sets} FROM cat_orig o WHERE fato.rid = o.rid`);
+  const dimsExtras = ATRIBS_TAX.filter((a) => a.dim);
+  const doses = estado.periodosDos || [];
+  await c.query(`UPDATE fato SET ${[
+    ...NIVEIS_TAX.map((k, i) => `d_${k} = o.c${i + 1}`),
+    ...dimsExtras.map((a) => `d_${a.key} = o.o_${a.key}`),
+    'qtdnum = o.o_qtdnum', ...doses.map((d) => `${d} = o.o_${d}`),
+  ].join(', ')} FROM cat_orig o WHERE fato.rid = o.rid`);
+  estado.tax.casaram = null;
   const mapa = estado.tax.mapa;
   if (!mapa) return;
-  await c.query('CREATE OR REPLACE TABLE tax (sku VARCHAR, n1 VARCHAR, n2 VARCHAR, n3 VARCHAR, n4 VARCHAR, n5 VARCHAR)');
-  const linhas = [...mapa].map(([cod, v]) => `(${[cod, ...v.n].map((x) => sqlTexto(x || '')).join(', ')})`);
-  for (let i = 0; i < linhas.length; i += 2000) {
-    await c.query(`INSERT INTO tax VALUES ${linhas.slice(i, i + 2000).join(', ')}`);
+  // a taxonomia vira uma tabela lida pelo DuckDB a partir de um CSV montado na memória (rápido com 180 mil códigos)
+  const q = (v) => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+  const colsX = ATRIBS_TAX.map((a) => a.key);
+  const partes = [['sku', 'n1', 'n2', 'n3', 'n4', 'n5', ...colsX].join(';')];
+  mapa.forEach((v, cod) => { partes.push([cod, ...v.n, ...colsX.map((k) => (v.x || {})[k] || '')].map(q).join(';')); });
+  if (estado.arquivoTax) { try { await estado.db.dropFile(estado.arquivoTax); } catch { /* ignora */ } }
+  estado.arquivoTax = `tax_${Date.now()}.csv`;
+  await estado.db.registerFileText(estado.arquivoTax, partes.join('\n'));
+  await c.query(`CREATE OR REPLACE TABLE tax AS SELECT * FROM read_csv(${sqlTexto(estado.arquivoTax)}, delim=';', header=true, all_varchar=true, quote='"', escape='"')`);
+  await estado.db.dropFile(estado.arquivoTax);
+  estado.arquivoTax = null;
+  // N1–N5: "-" ou vazio = sem detalhamento
+  const nivel = (k) => `CASE WHEN COALESCE(TRIM(t.n${k}), '') IN ('', '-') THEN '${SEM_DETALHAMENTO}' ELSE TRIM(t.n${k}) END`;
+  const atrib = (k) => `CASE WHEN COALESCE(TRIM(t.${k}), '') IN ('', '-') THEN '${SEM_INFORMACAO}' ELSE TRIM(t.${k}) END`;
+  const presentes = estado.tax.atribs || [];
+  await c.query(`UPDATE fato SET ${[
+    ...NIVEIS_TAX.map((k, i) => `d_${k} = ${nivel(i + 1)}`),
+    ...dimsExtras.filter((a) => presentes.includes(a.key)).map((a) => `d_${a.key} = ${atrib(a.key)}`),
+  ].join(', ')} FROM tax t WHERE fato.sku = t.sku AND NOT fato.is_el`);
+  // Quantidade Num da taxonomia (vazia: fica a da base) e as doses recalculadas com ela
+  if (presentes.includes('qtdnum')) {
+    await c.query(`UPDATE fato SET qtdnum = COALESCE(num(NULLIF(TRIM(t.qtdnum), '')), fato.qtdnum)
+      FROM tax t WHERE fato.sku = t.sku AND NOT fato.is_el`);
+    if (doses.length) {
+      await c.query(`UPDATE fato SET ${doses.map((d) => `${d} = ${d.replace('dos_', 'und_')} * qtdnum`).join(', ')}
+        WHERE NOT is_el AND sku IN (SELECT sku FROM tax)`);
+    }
   }
-  const vazio = (k) => `COALESCE(NULLIF(TRIM(t.n${k}), ''), '(vazio)')`;
-  await c.query(`UPDATE fato SET ${NIVEIS_TAX.map((k, i) => `d_${k} = ${vazio(i + 1)}`).join(', ')}
-    FROM tax t WHERE fato.sku = t.sku AND NOT fato.is_el`);
-  // apresentações da base que não estão na taxonomia
   await c.query(`UPDATE fato SET ${NIVEIS_TAX.map((k) => `d_${k} = ${sqlTexto(SEM_CATEGORIA)}`).join(', ')}
     WHERE NOT is_el AND sku NOT IN (SELECT sku FROM tax)`);
+  // colunas que vêm da taxonomia: sem valor na base ("-", vazia ou ausente) = "(sem informação)"
+  for (const at of dimsExtras.filter((x) => presentes.includes(x.key))) {
+    await c.query(`UPDATE fato SET d_${at.key} = '${SEM_INFORMACAO}' WHERE NOT is_el AND d_${at.key} IN ('(não informado)', '(vazio)', '-')`);
+  }
+  const [r] = await consultar(`SELECT COUNT(DISTINCT sku) AS total, COUNT(DISTINCT sku) FILTER (WHERE sku IN (SELECT sku FROM tax)) AS casaram
+    FROM fato WHERE NOT is_el`);
+  estado.tax.casaram = r;
+}
+
+// ----- painel "Validação da base" (página Filtros) -----
+async function atualizarValidacao() {
+  if (!estado.conn) return;
+  const t = estado.tax;
+  const j = estado.janelaPreco || {};
+  let a;
+  if (t.mapa && t.casaram) {
+    const { total, casaram } = t.casaram;
+    a = `<b>${inteiro(casaram)}</b> de ${inteiro(total)} apresentações da base (cd_apresentacao) casaram com a taxonomia
+      (${percentual(divisao(casaram, total))}). A taxonomia (${escaparHtml(textoOrigemTaxonomia().replace('Taxonomia: ', ''))}) tem ${inteiro(t.mapa.size)} códigos.
+      ${total - casaram > 0 ? `${inteiro(total - casaram)} apresentações da base não estão nela: ficam "Sem categoria" e mantêm Concentração, Quantidade e Padrão SKU da base.` : ''}`;
+  } else {
+    a = 'Sem taxonomia separada: as categorias vêm das colunas CLASSIF. GERAL da base de valores.';
+  }
+  const b = j.texto
+    ? `<b>${escaparHtml(j.meses.join(', '))}</b> (último mês com algum valor ≠ 0 na base: ${escaparHtml(j.ultimo)}). A mesma janela vale para todos os produtos.`
+    : 'A base não tem colunas mensais com valores.';
+  // (c) 3 apresentações com mais unidades na janela (sem filtros), com a conta aberta
+  let c = '';
+  if (j.texto) {
+    const linhas = await consultar(`SELECT sku, any_value(d_apres) AS apres, SUM(${exprJanelaPreco('und')}) u,
+        SUM(${exprJanelaPreco('pf')}) p, SUM(${exprJanelaPreco('rcd')}) r, SUM(${exprJanelaPreco('rc')}) c
+      FROM fato WHERE NOT is_el GROUP BY sku HAVING u > 0 AND p > 0 AND r > 0 AND c > 0 ORDER BY u DESC LIMIT 3`);
+    const fmtV = (v) => fmt2.format(v);
+    c = `<table class="tabela-validacao"><thead><tr><th>cd_apresentacao</th><th>Apresentação</th><th>Unidades</th><th>Valor PF</th>
+      <th>Valor RCD</th><th>Valor RC</th><th>PF/UND</th><th>RCD/UND</th><th>RC/UND</th><th>Desc. Com.</th><th>Margem PDV</th></tr></thead><tbody>
+      ${linhas.map((l) => {
+        const pf = l.p / l.u, rcd = l.r / l.u, rc = l.c / l.u;
+        return `<tr><td>${escaparHtml(l.sku)}</td><td>${escaparHtml(l.apres)}</td><td>${fmt0.format(l.u)}</td><td>${fmtV(l.p)}</td>
+          <td>${fmtV(l.r)}</td><td>${fmtV(l.c)}</td>
+          <td title="${fmtV(l.p)} ÷ ${fmt0.format(l.u)}">${reais(pf)}</td><td title="${fmtV(l.r)} ÷ ${fmt0.format(l.u)}">${reais(rcd)}</td>
+          <td title="${fmtV(l.c)} ÷ ${fmt0.format(l.u)}">${reais(rc)}</td>
+          <td title="1 − ${fmt2.format(rcd)} ÷ ${fmt2.format(pf)}">${percentual(1 - rcd / pf)}</td>
+          <td title="(${fmt2.format(rc)} − ${fmt2.format(rcd)}) ÷ ${fmt2.format(rc)}">${percentual((rc - rcd) / rc)}</td></tr>`;
+      }).join('')}</tbody></table>
+      <p class="validacao-nota">Valores somados nos meses ${escaparHtml(j.texto)}, sem filtros. PF/UND = Σ PF ÷ Σ unidades (idem RCD e RC);
+      Desc. Com. = 1 − RCD/UND ÷ PF/UND; Margem PDV = (RC/UND − RCD/UND) ÷ RC/UND. Passe o mouse nos valores para ver a conta.</p>`;
+  }
+  $('validacao-corpo').innerHTML = `<ol class="lista-validacao">
+    <li><b>(a) Junção pela chave cd_apresentacao:</b> ${a}</li>
+    <li><b>(b) Meses do preço médio:</b> ${b}</li>
+    <li><b>(c) Exemplo de 3 apresentações:</b>${c || ' —'}</li></ol>`;
 }
 
 // a taxonomia mudou: refaz a junção e atualiza todas as páginas
@@ -5109,15 +5329,16 @@ async function taxonomiaMudou(imediato = false) {
   const executar = async () => {
     if (!estado.conn) return;
     // base sem as colunas CLASSIF. GERAL: com taxonomia, os filtros Categoria 01–05 passam a existir
-    const faltam = estado.tax.mapa && NIVEIS_TAX.some((k) => !estado.dims.some((d) => d.key === k));
+    const faltam = DIMENSOES.some((d) => dimDaTaxonomia(d.key) && !estado.dims.some((x) => x.key === d.key));
     await aplicarTaxonomia();
     estado.cacheValoresEL = {};
     if (faltam) {
-      estado.dims = DIMENSOES.filter((d) => estado.dims.some((x) => x.key === d.key) || NIVEIS_TAX.includes(d.key));
+      estado.dims = DIMENSOES.filter((d) => estado.dims.some((x) => x.key === d.key) || dimDaTaxonomia(d.key));
       prepararInterface();
     }
     await carregarLinhasCategorizacao();
     await atualizarTudo();
+    atualizarValidacao();
     redesenharCatQuandoLivre();
   };
   if (imediato) return executar();
@@ -5133,6 +5354,7 @@ $('input-taxonomia').addEventListener('change', async (e) => {
     const mapa = lerTaxonomiaCsv(decodificarTexto(await arquivo.arrayBuffer()));
     if (!mapa.size) throw new Error('nenhuma apresentação no arquivo');
     estado.tax.mapa = mapa;
+    estado.tax.atribs = mapa.atribs;
     estado.tax.antes = new Map();
     await salvarTaxonomia();
     avisoRapido(`Taxonomia carregada: ${inteiro(mapa.size)} apresentações (salva neste navegador)`);
@@ -5201,7 +5423,7 @@ function alterarCategorias(skus, novos) {
     const l = t.porSku && t.porSku.get(sku);
     const n = atual ? [...atual.n] : ['', '', '', '', ''];
     novos.forEach((v, k) => { if (v !== null && v !== undefined) n[k] = v.trim(); });
-    t.mapa.set(sku, { desc: (atual && atual.desc) || (l && l.apres) || '', n });
+    t.mapa.set(sku, { desc: (atual && atual.desc) || (l && l.apres) || '', n, x: (atual && atual.x) || {} });
   }
   salvarTaxonomia();
   taxonomiaMudou();
@@ -5294,7 +5516,7 @@ function desenharArvoreCat() {
   const raiz = { filhos: new Map(), skus: 0, rcd: 0 };
   for (const l of estado.tax.linhas) {
     const n = niveisAtuais(l);
-    const caminho = semCategoria(n) ? [SEM_CATEGORIA] : n.map((x) => x || '(vazio)');
+    const caminho = semCategoria(n) ? [SEM_CATEGORIA] : n.map((x) => (!x || x === '-' ? SEM_DETALHAMENTO : x));
     raiz.skus++; raiz.rcd += l.rcd;
     let no = raiz;
     for (const nome of caminho) {
@@ -5442,27 +5664,41 @@ function baixarCsv(nome, cab, linhas) {
   setTimeout(() => URL.revokeObjectURL(a.href), 3000);
 }
 // taxonomia completa: todas as apresentações da base + códigos que só existem na taxonomia
-function linhasTaxonomiaCompleta() {
+// colunas na mesma ordem do arquivo: código; [descrição]; Concentracao…PADRÃO SKU; N1–N5; Classif. Mol. 1 e 2
+function cabecalhoTax(comDesc) {
+  const presentes = ATRIBS_TAX.filter((a) => (estado.tax.atribs || []).includes(a.key));
+  return [COL_SKU, ...(comDesc ? ['Apresentacao Desc Longa'] : []),
+    ...presentes.filter((a) => !a.depois).map((a) => a.col), ...COLS_TAX, ...presentes.filter((a) => a.depois).map((a) => a.col)];
+}
+function linhaTax(cod, desc, n, x, comDesc) {
+  const presentes = ATRIBS_TAX.filter((a) => (estado.tax.atribs || []).includes(a.key));
+  const v = (a) => (x || {})[a.key] || '';
+  return [cod, ...(comDesc ? [desc || ''] : []), ...presentes.filter((a) => !a.depois).map(v), ...(n || ['', '', '', '', '']),
+    ...presentes.filter((a) => a.depois).map(v)];
+}
+// taxonomia completa: todas as apresentações da base + códigos que só existem na taxonomia
+function linhasTaxonomiaCompleta(comDesc) {
   const t = estado.tax;
-  const linhas = (t.linhas || []).map((l) => [l.sku, l.apres, ...(niveisAtuais(l) || ['', '', '', '', ''])]);
-  if (t.mapa) t.mapa.forEach((v, c) => { if (!t.porSku.has(c)) linhas.push([c, v.desc || '', ...v.n]); });
+  const xDe = (c) => (t.mapa && t.mapa.get(c) ? t.mapa.get(c).x : {});
+  const linhas = (t.linhas || []).map((l) => linhaTax(l.sku, l.apres, niveisAtuais(l), xDe(l.sku), comDesc));
+  if (t.mapa) t.mapa.forEach((v, c) => { if (!t.porSku.has(c)) linhas.push(linhaTax(c, v.desc, v.n, v.x, comDesc)); });
   return linhas;
 }
-$('btn-cat-exportar').addEventListener('click', () => baixarCsv('taxonomia_completa.csv', [COL_SKU, 'Apresentacao Desc Longa', ...COLS_TAX], linhasTaxonomiaCompleta()));
+$('btn-cat-exportar').addEventListener('click', () => baixarCsv('taxonomia_completa.csv', cabecalhoTax(true), linhasTaxonomiaCompleta(true)));
 $('btn-cat-exportar-alt').addEventListener('click', () => {
   const t = estado.tax;
   if (!t.antes.size) { avisoRapido('Nenhuma alteração nesta sessão.'); return; }
   const linhas = [...t.antes.keys()].map((sku) => {
     const l = t.porSku.get(sku);
     const v = t.mapa.get(sku);
-    return [sku, (l && l.apres) || (v && v.desc) || '', ...(v ? v.n : ['', '', '', '', ''])];
+    return linhaTax(sku, (l && l.apres) || (v && v.desc), v ? v.n : null, v ? v.x : {}, true);
   });
-  baixarCsv('taxonomia_alteracoes.csv', [COL_SKU, 'Apresentacao Desc Longa', ...COLS_TAX], linhas);
+  baixarCsv('taxonomia_alteracoes.csv', cabecalhoTax(true), linhas);
 });
 // para o repositório: só códigos e classificações (nenhum nome de produto, corporação etc.)
 $('btn-cat-exportar-repo').addEventListener('click', () => {
-  const linhas = linhasTaxonomiaCompleta().map(([c, , ...n]) => [c, ...n]).filter((l) => l.slice(1).some(Boolean));
-  baixarCsv('taxonomia.csv', [COL_SKU, ...COLS_TAX], linhas);
+  const linhas = linhasTaxonomiaCompleta(false).filter((l) => l.slice(1).some(Boolean));
+  baixarCsv('taxonomia.csv', cabecalhoTax(false), linhas);
 });
 
 $('btn-cat-desfazer').addEventListener('click', desfazerAlteracoes);

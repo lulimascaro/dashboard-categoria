@@ -60,10 +60,21 @@ A chave é `cd_apresentacao`, e a taxonomia substitui as colunas que vierem na b
 Ordem de prioridade: 1) taxonomia salva **neste navegador** (carregada na tela inicial ou editada na
 página Categorização); 2) `taxonomia.csv` na raiz do repositório, se existir; 3) as colunas da própria base.
 
+A taxonomia pode trazer também `Concentracao`, `Quantidade`, `Quantidade Num`, `PADRÃO SKU`,
+`Classif. Mol. 1` e `Classif. Mol. 2`: para os códigos dela, esses valores substituem os da base (os códigos
+fora dela ficam com os da base). "-" nos níveis N1–N5 aparece como "(sem detalhamento)"; "-" ou vazio nas
+demais colunas aparece como "(sem informação)". A página Filtros mostra o painel **Validação da base**
+(códigos que casaram, meses do preço médio e um exemplo da conta).
+
+**Preço médio nas tabelas** (Gráfico e Tabela e Pareto): PF/UND, RCD/UND e RC/UND = Σ valor ÷ Σ unidades nos
+3 últimos meses da base (terminando no último mês com algum valor diferente de zero, a mesma janela para todos),
+com Desc. Com. = 1 − RCD/UND ÷ PF/UND e Margem PDV = (RC/UND − RCD/UND) ÷ RC/UND. O botão **Drill-down**
+faz o clique numa linha descer um nível da hierarquia além de filtrar.
+
 Na página **Categorização** é possível revisar e editar N1–N5 (uma a uma ou em massa), ver a árvore da
 hierarquia e exportar a taxonomia. O botão "Exportar para o repositório (só códigos)" gera um
 `taxonomia.csv` apenas com `cd_apresentacao` e N1–N5, sem nomes de produtos ou empresas.
-**Este repositório não guarda nenhuma taxonomia real** — só o `taxonomia_exemplo.csv`, fictício.
+O `taxonomia_exemplo.csv` é fictício (compatível com o `exemplo.csv`); o `taxonomia.csv` da raiz é o que o dono do repositório publicar.
 
 ## Correção de preço (Infoprice)
 

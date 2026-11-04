@@ -801,3 +801,18 @@ body.com-el .chave-el { background: var(--amarelo); color: #333; }
 .arv-total { font-weight: 700; margin-bottom: 6px; }
 .cat-semvenda h3 { margin: 0; padding: 7px 12px; background: #8a6d00; color: #fff; font-size: 14px; }
 .rodape-versao .texto-taxonomia:empty { display: none; }
+
+/* ---------- Preço médio (3 meses), drill-down e validação ---------- */
+.janela-preco { font-size: 11.5px; color: #555; padding: 6px 10px 0; }
+.janela-preco:empty { display: none; }
+.btn-drill.ativo { background: var(--azul); color: #fff; }
+:is(#tabela, #tabela-par) td.cel-preco { font-weight: 600; }
+.card-validacao { background: #fff; border-radius: 6px; margin: 12px 16px 0; box-shadow: 0 1px 3px rgba(0,0,0,.08); font-size: 13px; }
+.card-validacao summary { cursor: pointer; padding: 8px 12px; font-weight: 700; color: var(--cinza-escuro); }
+#validacao-corpo { padding: 0 14px 10px; }
+.lista-validacao { margin: 0; padding-left: 4px; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.tabela-validacao { border-collapse: collapse; margin-top: 6px; font-size: 12px; }
+.tabela-validacao th { background: var(--cinza-escuro); color: #fff; padding: 5px 8px; text-align: right; white-space: nowrap; }
+.tabela-validacao td { padding: 4px 8px; border-bottom: 1px solid #eee; text-align: right; white-space: nowrap; }
+.tabela-validacao th:nth-child(-n+2), .tabela-validacao td:nth-child(-n+2) { text-align: left; }
+.validacao-nota { font-size: 11.5px; color: #777; margin: 6px 0 0; }

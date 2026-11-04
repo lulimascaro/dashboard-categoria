@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dashboard de Mercado Farmacêutico</title>
   <!-- Ao publicar uma nova versão, atualize o número "?v=" nas duas linhas abaixo -->
-  <link rel="stylesheet" href="style.css?v=20261030-2">
+  <link rel="stylesheet" href="style.css?v=20261104-1">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
-  <script type="module" src="app.js?v=20261030-2"></script>
-  <script type="module" src="el.js?v=20261030-2"></script>
-  <script type="module" src="compilado.js?v=20261030-2"></script>
+  <script type="module" src="app.js?v=20261104-1"></script>
+  <script type="module" src="el.js?v=20261104-1"></script>
+  <script type="module" src="compilado.js?v=20261104-1"></script>
 </head>
 <body>
 
@@ -76,6 +76,10 @@
 
     <!-- Página 1: Filtros -->
     <main id="pagina-filtros" class="pagina">
+      <details class="card-validacao" id="validacao" open>
+        <summary>Validação da base</summary>
+        <div id="validacao-corpo">Carregando…</div>
+      </details>
       <section class="secao">
         <h2 class="faixa">MERCADO</h2>
         <div class="grade-filtros" id="filtros-MERCADO"></div>
@@ -223,7 +227,9 @@
           </div>
           <div id="nota-grafico"></div>
           <div class="card-tabela">
+            <div class="janela-preco"></div>
             <div class="barra-tabela">
+              <button class="botao-pequeno btn-drill" id="btn-drill" title="Ligado: clicar numa linha desce um nível e filtra os gráficos">↘ Drill-down</button>
               <button class="botao-pequeno" id="btn-expandir">+ Expandir tudo</button>
               <button class="botao-pequeno" id="btn-recolher">− Recolher tudo</button>
               <button class="botao-pequeno botao-limpar" id="btn-limpar-selecao" hidden>✕ Limpar seleção</button>
@@ -291,7 +297,9 @@
           </div>
           <div id="nota-grafico-par"></div>
           <div class="card-tabela">
+            <div class="janela-preco"></div>
             <div class="barra-tabela">
+              <button class="botao-pequeno btn-drill" id="btn-drill-par" title="Ligado: clicar numa linha desce um nível e filtra o gráfico e os cards">↘ Drill-down</button>
               <button class="botao-pequeno" id="btn-expandir-par">+ Expandir tudo</button>
               <button class="botao-pequeno" id="btn-recolher-par">− Recolher tudo</button>
               <button class="botao-pequeno botao-limpar" id="btn-limpar-selecao-par" hidden>✕ Limpar seleção</button>
